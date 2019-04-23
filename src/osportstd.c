@@ -115,8 +115,8 @@ size_t PFread(void* buffer, size_t element_size, size_t element_count, PF_t* f) 
     cbuf = (char*)buffer;
     resultsize = element_size*element_count;
     curstart = 0;
+    copysize = resultsize;
     if (f->bufpos < (long long)f->maxbpos) {
-        copysize = resultsize;
         if (f->bufpos + copysize > f->maxbpos)
             copysize = f->maxbpos - f->bufpos + 1;
         memcpy(cbuf + curstart, f->buffer + f->bufpos, copysize);
@@ -131,6 +131,7 @@ size_t PFread(void* buffer, size_t element_size, size_t element_count, PF_t* f) 
 #else
         f->maxbpos = fread(f->buffer, 1, PFBUFFER - 1, f->filepointer);
 #endif
+        f->bufpos = 0;
         f->buffer[f->maxbpos] = 0;
         if (resultsize-curstart > f->maxbpos)
             copysize = f->maxbpos+1;
