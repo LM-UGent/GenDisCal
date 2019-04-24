@@ -905,8 +905,11 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
                                 }
                             }
                             else if (outputmode == OUTPUTMODE_MATRIX) {
-                                datatable_set(otable, ifl_added, ifl_c, dist);
-                                datatable_set(otable, ifl_c, ifl_added, dist);
+                                #pragma omp critical
+                                {
+                                    datatable_set(otable, ifl_added, ifl_c, dist);
+                                    datatable_set(otable, ifl_c, ifl_added, dist);
+                                }
                             }
                             #pragma omp atomic
                             (*p_n)++;

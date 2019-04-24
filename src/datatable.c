@@ -96,13 +96,9 @@ void _datatable_addrowsupto(datatable_t* target, size_t row) {
 }
 
 errcode_t datatable_set(datatable_t* target, size_t col, size_t row, double value) {
-    static int blocker=0;
-    while(blocker){}
-    blocker = 1;
     _datatable_addcolsupto(target, col);
     _datatable_addrowsupto(target, row);
     target->values[row][col] = value;
-    blocker = 0;
     return 0;
 }
 double datatable_get(datatable_t* target, size_t col, size_t row, int* nullflag){
@@ -115,16 +111,12 @@ double datatable_get(datatable_t* target, size_t col, size_t row, int* nullflag)
 
 void datatable_setcolname(datatable_t* target, size_t col, const char* name) {
     size_t namelen;
-    static int blocker = 0;
-    while (blocker) {}
-    blocker = 1;
     _datatable_addcolsupto(target, col);
     if (target->colnames[col]) free(target->colnames[col]);
     namelen = strlen(name) + 1;
     target->colnames[col] = malloc(namelen);
     memcpy(target->colnames[col], name, namelen);
     DM64_append(target->colids, name, (int)namelen - 1, (int64_t)col);
-    blocker = 0;
 }
 size_t datatable_getcolid(datatable_t* target, const char* name){
     int nullflag;
@@ -141,16 +133,12 @@ char* datatable_getcolname(datatable_t* target, size_t col) {
 
 void datatable_setrowname(datatable_t* target, size_t row, const char* name) {
     size_t namelen;
-    static int blocker = 0;
-    while (blocker) {}
-    blocker = 1;
     _datatable_addrowsupto(target, row);
     if (target->rownames[row]) free(target->rownames[row]);
     namelen = strlen(name) + 1;
     target->rownames[row] = malloc(namelen);
     memcpy(target->rownames[row], name, namelen);
     DM64_append(target->rowids, name, (int)namelen - 1, (int64_t)row);
-    blocker = 0;
 }
 ssize_t datatable_getrowid(datatable_t* target, const char* name) {
     int nullflag;
