@@ -24,5 +24,6 @@ $(ODIR)/%.o: $(SDIR)/%.c $(IFILES)
 	$(CC) -c -o $@ $< $(CFLAGS)
 
 $(BDIR)/$(TARGET): $(OFILES) $(LOCALSRC)
+	@mkdir -p $(@D)
 	$(CC) -o $@ $^ $(CFLAGS)
 
