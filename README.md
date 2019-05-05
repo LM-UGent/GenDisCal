@@ -36,10 +36,10 @@ The output format is a list of comparisons, but this may be changed by adding on
     GenDisCal --filelist manyfiles.list --histogram
     GenDisCal --filelist manyfiles.list --histogram <bin width>
 
-You may want to limit the output to a specific range of values. The `--under` and `--above`
+You may want to limit the output to a specific range of values. The `--below` and `--above`
 can be used for this purpose
 
-    GenDisCal --filelist manyfiles.list --above 0.20 --under 0.40
+    GenDisCal --filelist manyfiles.list --above 0.20 --below 0.40
 
 It is possible to perform one-against-all comparisons using the `--search` option. If this
 option is absent, GenDisCal will perform all-against-all comparions, and if it is present but
