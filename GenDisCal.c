@@ -59,7 +59,7 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
     args_add(result, "taxonomy", 't', "str,str");
     args_add(result, "histogram", 'g', "float");
     args_add(result, "distancematrix", 'x', "");
-    args_add(result, "under", 'u', "float");
+    args_add(result, "below", 'w', "float");
     args_add(result, "above", 'v', "float");
     args_add(result, "only", 'y', "str");
 
@@ -150,7 +150,7 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "comparisons.\n"
         "The output format is a always a comma-separated file.\n",
         "enable distance matrix output");
-    args_add_help(result, "under", "VALUES UNDER A GIVEN VALUE",
+    args_add_help(result, "below", "VALUES BELOW A GIVEN VALUE",
         "Only report values below the specified value. (default:infinity)\n",
         "Only report values below the specified value");
     args_add_help(result, "above", "VALUES ABOVE A GIVEN VALUE",
