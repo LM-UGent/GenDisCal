@@ -24,11 +24,21 @@ typedef int32_t ssize_t;
 #define NAN (0/0)
 #endif
 
+#define rand_u32_minstd(x) (((uint64_t)x* 48271u) % 0x7fffffff)
 
 typedef int errcode_t;
 
 int os_fileexists(const char* path);
 char* os_rmdirname(char* path);
+
+#define kilocount(x)    (x*1000)
+#define Megacount(x)    (x*1000000)
+#define Gigacount(x)    (x*1000000000)
+#define Teracount(x)    (x*1000000000000)
+#define Petacount(x)    (x*1000000000000000)
+#define Exacount(x)     (x*1000000000000000000)
+#define Zettacount(x)   (x*1000000000000000000000)
+#define Yottacount(x)   (x*1000000000000000000000000)
 
 #ifdef _WIN32
 #define _LLD_   "%lld"

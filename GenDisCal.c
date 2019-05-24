@@ -62,7 +62,8 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
     args_add(result, "below", 'w', "float");
     args_add(result, "above", 'v', "float");
     args_add(result, "only", 'y', "str");
-
+    args_add(result, "filtershort", 'l', "int");
+    args_add(result, "keepsigs", 'k', "");
 #ifndef NOOPENMP
     args_add(result, "nprocs", 'n', "int");
 #endif
@@ -171,6 +172,14 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "  Same_Subspecies\n"
         "  Replicate\n",
         "Only report values with a given taxonomic relation");
+    args_add_help(result, "filtershort", "FILTER SHORT SEQUENCES",
+        "Indicates the minimum contig length to keep. Experience shows that contigs which "
+        "are shorther than ~2000 bp vary depending on the assembly method. (default: 2000)",
+        "Indicates the minimum contig length to keep.");
+    args_add_help(result, "keepsigs", "KEEP SIGNATURES",
+        "If this option is present, a signature file will be generated for re-use, named "
+        "<filename>.sig.",
+        "generate signature files");
 #ifndef NOOPENMP
     args_add_help(result, "nprocs", "NUMBER OF PROCESSOR CORES TO USE",
         "This option defines the number of cores to use. By default, the number of cores "
@@ -316,6 +325,11 @@ int set_basis_function(args_t* args, basis_function* bf, size_t* sig_len, size_t
             kmerlen = 6;
             *sig_len = (1LL << (6 * 2));
         }
+        else if (strcmp(presetstr, "approxANI") == 0) {
+            *bf = minhashsig;
+            kmerlen = 31;
+            *sig_len = SIGLEN_MINHASH;
+        }
         else {
             args_report_warning(NULL, "Unknown preset <%s>, using default basis: <karl 4>\n", presetstr);
             kmerlen = 4;
@@ -408,6 +422,10 @@ int set_method_function(args_t* args, method_function* mf, double* metharg) {
             *mf = SVC;
             *metharg = 0.02;
         }
+        else if (strcmp(presetstr, "approxANI") == 0) {
+            *mf = approxANI;
+            *metharg = 31.0;
+        }
         else {
             args_report_warning(NULL, "Unknown preset <%s>, using default method: <PaSiT 0.02>\n", presetstr);
             *mf = SVC;
@@ -486,7 +504,7 @@ signature_t* read_sig_file(char* filename) {
     return res;
 }
 
-signature_t* get_signature_from_fasta(char* filename, basis_function basis, int nlen) {
+signature_t* get_signature_from_fasta(char* filename, basis_function basis, int nlen, size_t minseqlen) {
     PF_t* f;
     nucseq** nsa;
     nucseq tmpseq = EMPTYSEQ;
@@ -499,7 +517,7 @@ signature_t* get_signature_from_fasta(char* filename, basis_function basis, int 
         args_report_info(NULL, "Failed to read: %s\n", filename);
         return NULL;
     }
-    nsa = nucseq_array_from_fasta(f, &outcount, 1, 1);
+    nsa = nucseq_array_from_fasta(f, &outcount, 1, minseqlen);
     nucseq_from_string(&spacerseq, "N");
 
     sg = signature_alloc();
@@ -520,20 +538,49 @@ signature_t* get_signature_from_fasta(char* filename, basis_function basis, int 
     free(nsa);
     return sg;
 }
-signature_t* get_signatures(char* filename, basis_function basis, int nlen) {
+signature_t* get_signatures(char* filename, basis_function basis, int nlen, size_t minseqlen) {
     if (endswith(".sig", filename))
         return read_sig_file(filename);
     else
-        return get_signature_from_fasta(filename, basis, nlen);
+        return get_signature_from_fasta(filename, basis, nlen, minseqlen);
 
+}
+void write_signature(PF_t* target, signature_t* source) {
+    int32_t type;
+    int32_t datatype; /* NOTE: datatype is ignored - values are assumed to be stored as double */
+    datatype = 1;
+    type = 1;
+    /* it is assumed that the file's endianness matches that of the OS */
+    PFwrite(&type, sizeof(int32_t), 1, target);
+    PFwrite(&datatype, sizeof(int32_t), 1, target);
+    PFwrite(&(source->len), sizeof(uint64_t), 1, target);
+    PFwrite(source->data, sizeof(double), source->len, target);
+}
+void write_sigfile(const char* basename, signature_t* source) {
+    PF_t* f;
+    char* newname;
+    size_t baselen;
+    baselen = strlen(basename);
+    newname = (char*) malloc(baselen + 5);
+    memcpy(newname, basename, baselen);
+    newname[baselen] = '.';
+    newname[baselen + 1] = 's';
+    newname[baselen + 2] = 'i';
+    newname[baselen + 3] = 'g';
+    newname[baselen + 4] = '\0';
+    PFopen(&f, newname, "w");
+    write_signature(f, source);
+    PFclose(f);
 }
 
 signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t nfiles, size_t* sig_len, int numthreads) {
     basis_function bf;
     size_t i, n;
     size_t* p_n;
+    size_t* i_p;
     size_t notax;
     size_t* p_notax;
+    size_t minseqlen;
     size_t countsperproc;
     int nocalc;
     size_t kmerlen;
@@ -548,6 +595,7 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
     size_t nalloctaxstrings;
     DM64_t* file2tax;
     signature_t** result;
+    int gensigs;
     
     nocalc = set_basis_function(args, &bf, sig_len, &kmerlen);
 
@@ -587,7 +635,9 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
         }
 
         /* read the signatures */
+        gensigs = args_ispresent(args, "keepsigs");
         args_report_progress(NULL, "Reading signatures...\n");
+        minseqlen = (size_t)args_getint(args, "filtershort", 0, 2000);
         if (nfiles < (size_t) numthreads) numthreads = (int)nfiles;
         omp_set_num_threads(numthreads);
         n = 0;
@@ -599,24 +649,21 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
         countsperproc = (nfiles / numthreads);
         if (countsperproc*numthreads < nfiles)
             countsperproc++;
-        args_report_info(NULL, "Each thread handles " _LLD_ " files\n", countsperproc);
-        #ifndef NOOPENMP
+        args_report_info(NULL, "Each thread handles on average " _LLD_ " files\n", countsperproc);
+        i = 0;
+        i_p = &i;
         #pragma omp parallel
-        #endif
         {
             char* ltaxonstring;
             int nullflag;
             size_t ifl_added = 0;
             size_t taxnameid;
             int cthread = omp_get_thread_num();
-            size_t firstf = countsperproc*cthread;
-            size_t lastf = countsperproc*(cthread + 1);
-            if (firstf > nfiles) firstf = nfiles;
-            if (lastf > nfiles) lastf = nfiles;
             #pragma omp critical
-            args_report_info(NULL, "Thread %3d handles [%zd : %zd]\n", cthread, firstf, lastf);
-            for (ifl_added = firstf;ifl_added < lastf;ifl_added++) {
-                result[ifl_added] = get_signatures(sourcefiles[ifl_added], bf, (int)kmerlen);
+            ifl_added = ((*i_p)++);
+            while(ifl_added<nfiles) {
+                result[ifl_added] = get_signatures(sourcefiles[ifl_added], bf, (int)kmerlen, minseqlen);
+                if (gensigs) write_sigfile(sourcefiles[ifl_added], result[ifl_added]);
                 if (taxtype) {
                     nullflag = 0;
                     taxnameid = DM64_get(file2tax, result[ifl_added]->fname, (int)strlen(result[ifl_added]->fname), &nullflag);
@@ -624,17 +671,13 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
                     if (!nullflag)
                         taxextractor_translate(te, taxtype, ltaxonstring, result[ifl_added]->lineage, 9);
                     else {
-                        #ifndef NOOPENMP
                         #pragma omp atomic
-                        #endif
                         (*p_notax)++;
                         badtax = sourcefiles[ifl_added];
                     }
                 }
                 if (result[ifl_added]) {
-                    #ifndef NOOPENMP
                     #pragma omp atomic
-                    #endif
                     (*p_n)++;
                 }
                 else {
@@ -644,6 +687,8 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
                     #pragma omp critical
                     args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) files loaded\r", n, nfiles, (int)((n * 100) / nfiles));
                 }
+                #pragma omp critical
+                ifl_added = ((*i_p)++);
             }
         }
         #ifndef NOOPENMP
@@ -977,8 +1022,6 @@ int GenDisCal(args_t* args) {
     return 0;
 }
 
-#ifdef TEST
-#else
 int main(int argc, char** argv) {
     args_t* args;
     int result;
@@ -986,6 +1029,8 @@ int main(int argc, char** argv) {
     if(!args_is_helpmode(args))
         result = GenDisCal(args);
     args_free(args);
+#ifdef _DEBUG
+    system("PAUSE");
+#endif
     return result;
 }
-#endif

@@ -1,5 +1,6 @@
 #include "GenDisCal_distances.h"
 #include "vecops.h"
+#include <string.h>
 
 /* helper functions */
 double C0_step_function(double x, double tmin, double tmax) {
@@ -116,17 +117,38 @@ size_t karsn(nucseq* sequence, int n, double** result) { // n-mer karlin* signat
     return numel;
 }
 size_t markn1(nucseq* sequence, int n, double** result) {
-    /* TODO: not implemented*/
-    return 0;
+    int32_t* counts;
+    size_t numel;
+    nucseq revcomp = EMPTYSEQ;
+    counts = oligocount(sequence, n);
+    *result = fullmarkovsig(counts, n);
+    free(counts);
+    numel = (size_t)1 << (n * 2);
+    return numel;
 }
 size_t markn2(nucseq* sequence, int n, double** result){
-    /* TODO: not implemented*/
-    return 0;
+    int32_t* counts;
+    size_t numel;
+    nucseq revcomp = EMPTYSEQ;
+    counts = oligocount_2strand(sequence, n);
+    *result = fullmarkovsig(counts, n);
+    free(counts);
+    numel = (size_t)1 << (n * 2);
+    return numel;
 }
 size_t multikarl(nucseq* sequence, int n, double** result) {
     *result = multikarlsig(&sequence, 1, n, 20000, 10000);
     return (1LL << (2 * n))*(1LL << (2 * n));
 }
+size_t multifreq(nucseq* sequence, int n, double** result) {
+    *result = multifreqsig(&sequence, 1, n, 3000, "ATG");
+    return (1LL << (2 * n))*(1LL << (2 * n));
+}
+size_t minhashsig(nucseq* sequence, int n, double** result) {
+    *result = (double*) minhash_Msig(&sequence, 1, n, SIGLEN_MINHASH, 200000);
+    return SIGLEN_MINHASH;
+}
+
 // methods
 double ED(double* sig1, double* sig2, size_t veclen, double unused) {
     double* tmp;
@@ -393,4 +415,75 @@ double multiminSVC(double* sig1, double* sig2, size_t veclen, double threshold) 
         if (tmpresult < result)result = tmpresult;
     }
     return result;
+}
+double SNPest(double* freq1, double* freq2, size_t kmerlen, size_t seqlen) {
+    size_t i;
+    double result = 0;
+    double delta;
+    size_t veclen = 1LL << (2 * kmerlen);
+    double errorrate = (double)(2 * kmerlen);
+    for (i = 0;i < veclen;i++) {
+        delta = freq1[i] - freq2[i];
+        if (delta < 0)
+            delta = -delta;
+        result += delta;
+    }
+    result = result/errorrate;
+    return result;
+}
+double multifreqdist(double* sig1, double* sig2, size_t veclen, double threshold) {
+    double result;
+    double tmpresult;
+    double* dists;
+    size_t subveclen;
+    size_t i,j;
+    size_t kmerlen;
+    subveclen = (size_t)round(sqrt((double)veclen));
+    dists = calloc(subveclen, sizeof(double));
+    kmerlen = (size_t)(log2((double)subveclen)/2);
+    j = 0;
+    for (i = 1;i < subveclen;i++) {
+        tmpresult = SNPest(sig1 + i*subveclen, sig2 + i*subveclen, kmerlen, 3000);
+        if (tmpresult <= threshold) {
+            dists[j] = tmpresult;
+            j++;
+        }
+    }
+    result = vec_avg(dists,j);
+    free(dists);
+    return result;
+}
+static inline double resemblance2ANI(double v, double k) {
+    if (v == 0.0)return 0;
+    return 1.0 + log(v * 2 / (1 + v)) / k;
+}
+double approxANI(double* sig1, double* sig2, size_t veclen, double k) {
+    /* Fan et al., An assembly and alignment-free method of phylogeny reconstruction from next-generation sequencing data, 2015 */
+    /* Ondov et al., Mash: fast genome and metagenome distance estimation using MinHash, 2016 */
+    int64_t* s1;
+    int64_t* s2;
+    size_t i,j;
+    size_t AinterB;
+    size_t AunionB;
+    double resemblance;
+    s1 = (int64_t*)sig1;
+    s2 = (int64_t*)sig2;
+    i = j = 0;
+    AinterB = AunionB = 0;
+    while (i < veclen && j < veclen) {
+        if (s1[i] == s2[j]) {
+            i++;
+            j++;
+            AinterB++;
+        }
+        else if (s1[i] > s2[j]) {
+            j++;
+        }
+        else {
+            i++;
+        }
+        AunionB++;
+    }
+    resemblance = ((double)AinterB) / ((double)AunionB);
+    return 1-resemblance2ANI(resemblance, k);
 }

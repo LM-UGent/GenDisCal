@@ -13,7 +13,7 @@
 #define NOALLOC         0b00100
 #define READONLY        0b01000
 
-typedef uint8_t nucleotide;
+typedef int8_t nucleotide;
 
 #define nucA    0
 #define nucC    1
@@ -50,19 +50,29 @@ void subseq_nocpy(nucseq* target, nucseq* src, size_t start, size_t len);
 
 nucseq** nucseq_winread(nucseq* src, size_t* count, size_t winsize, size_t minstep);
 nucseq** nucseq_winreadmultiple(nucseq** src, size_t nsequences, size_t* output, size_t winsize, size_t minstep);
-
+#define NUCCUT_REQUIRE_BEGIN    1
+#define NUCCUT_REQUIRE_END      2
+#define NUCCUT_ALLOWOVERLAP     4
+#define NUCCUT_CONSIDERRC       8
+nucseq** nucseq_cutout(nucseq* src, nucseq* open, nucseq* close, size_t maxlen, size_t* output, uint32_t flags);
+nucseq** nucseq_cutoutmultiple(nucseq** src, size_t nsequences, nucseq* open, nucseq* close, size_t maxlen, size_t* output, uint32_t flags);
 #define MAXOLIGOSIG     12
 uint32_t* oligocount(nucseq* src, int k_len);
 uint32_t* oligocount_2strand(nucseq* src, int k_len);
 uint64_t* oligocount64_2strand(nucseq* src, int k_len);
 
 double nucseq_GC(nucseq* src);
+double* nucseq_GC_multiple(nucseq** src, size_t numseq);
 size_t minimal_qscore(nucseq* seq);
 
 double* freqsig(uint32_t* counts, int k_len);
 double* TETRAsig(uint32_t* counts);
 double* karlinsig(uint32_t* counts, int k_len);
+int64_t* minhash_Msig(nucseq** allsequences, size_t nseqs, int k, size_t siglen, size_t genomesize_est);
+double* multifreqsig(nucseq** allsequences, size_t nseqs, int k, size_t winsize, char* primer);
 double* multikarlsig(nucseq** allsequences, size_t nseqs, int k, size_t winsize, size_t minstep);
+double* fullmarkovsig(uint32_t* counts, int k);
+double* fullmarkovsig_zscore(uint32_t* counts, int k);
 
 size_t alignmatch(nucseq* toalign, nucseq* src, int64_t offset);
 int64_t best_perfect_align(nucseq* target, nucseq* src);
@@ -78,5 +88,5 @@ size_t extseq(nucseq* target, nucseq* src, uint32_t extension_flags, char* ext_a
 size_t concactseqs(nucseq* target, nucseq* left, nucseq* right);
 size_t appendtoseq(nucseq* target, nucseq* right);
 size_t nucsearch(nucseq* data, nucseq* pattern);
-
+size_t nucsearch_from(nucseq* data, nucseq* pattern, size_t start);
 #endif
