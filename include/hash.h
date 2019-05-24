@@ -2,6 +2,7 @@
 #define DEF_HASH
 
 #include <stdint.h>
+#include <stddef.h>
 
 typedef struct hash_descriptor_t hashdesc_t;
 

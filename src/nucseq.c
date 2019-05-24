@@ -1105,7 +1105,7 @@ void nucseq_oligocount_to_ht(nucseq* sequence, ht64_t* target, int k) {
     size_t i;
     size_t maxi;
     size_t stk;
-    char* tbs;
+    uint8_t* tbs;
     int nf;
     size_t ignorecount;
     size_t keylen;
@@ -1152,8 +1152,8 @@ void nucseq_oligocount_to_hashht(nucseq* sequence, ht64_t* target, int k, hashde
     size_t maxi;
     size_t stk;
     uint64_t hkey;
-    char* tbs;
-    char* tbsrc;
+    uint8_t* tbs;
+    uint8_t* tbsrc;
     int nf;
     size_t ignorecount;
     size_t keylen;
