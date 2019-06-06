@@ -1204,6 +1204,65 @@ ht64_t* kmerhash_table(nucseq** allsequences, size_t nseqs, int k, hashdesc_t* h
     return result;
 }
 
+void nucseq_oligocount_to_minhashLht(nucseq* sequence, ht64_t* target, int k, hashdesc_t* hash, size_t mod) {
+    size_t i;
+    size_t maxi;
+    size_t stk;
+    uint64_t hkey;
+    uint8_t* tbs;
+    uint8_t* tbsrc;
+    int nf;
+    size_t ignorecount;
+    size_t keylen;
+    stk = (size_t)k;
+    maxi = sequence->len - stk + 1;
+    tbs = NULL;
+    tbsrc = NULL;
+    ignorecount = 0;
+    for (i = 0;i < stk;i++) {
+        if (sequence->seq[i] == nucN)
+            ignorecount = i + 1;
+    }
+    for (i = 0;i < maxi;i++) {
+        if (sequence->seq[i + stk - 1] == nucN) {
+            ignorecount = k;
+        }
+        if (ignorecount > 0)
+            ignorecount--;
+        else {
+            keylen = twobitseq(sequence->seq + i, stk, &tbs);
+            twobitrcseq(sequence->seq + i, stk, &tbsrc);
+            if (memcmp(tbs, tbsrc, keylen) < 0) {
+                hkey = hash_index(tbs, keylen, hash);
+                if (hkey%mod == 0)
+                    ht64_set(target, tbs, keylen, hkey, &nf);
+            }
+            else {
+                hkey = hash_index(tbsrc, keylen, hash);
+                if (hkey%mod == 0)
+                    ht64_set(target, tbsrc, keylen, hkey, &nf);
+            }
+        }
+    }
+    free(tbs);
+    free(tbsrc);
+}
+ht64_t* kmerhash_minhashLtable(nucseq** allsequences, size_t nseqs, int k, hashdesc_t* hash, size_t mod) {
+    uint64_t nbins;
+    ht64_t* result;
+    size_t i;
+    nbins = 0;
+    for (i = 0;i < nseqs;i++) {
+        nbins += allsequences[i]->len;
+    }
+    if (nbins > 20000000)nbins = 20000000;
+    result = ht64_alloc_size(nbins);
+    for (i = 0;i < nseqs;i++) {
+        nucseq_oligocount_to_minhashLht(allsequences[i], result, k, hash, mod);
+    }
+    return result;
+}
+
 size_t nucseq_minimizers(nucseq* sequence, size_t** target, int k, size_t win) {
     dlink64_t* nextbestlist;
     dlink64_t* tmp_dlink;
@@ -1350,23 +1409,21 @@ int64_t* minhash_Msig(nucseq** allsequences, size_t nseqs, int k, size_t siglen,
     int64_t* valuetable;
     int64_t* valuetable2;
     size_t nkmers;
-    size_t i,j;
+    size_t i, j;
     size_t mod;
     hash = hashdesc_alloc();
+    mod = (genomesize_est / siglen) / 3 * 2;
     hashdesc_init_fingerprint64(hash);
-    ht_seq = kmerhash_table(allsequences, nseqs, k, hash);
+    ht_seq = kmerhash_minhashLtable(allsequences, nseqs, k, hash, mod);
     nkmers = ht64_astables(ht_seq, NULL, NULL, &valuetable);
     vec_sorti64(valuetable, nkmers);
-    mod = (genomesize_est / siglen)/3*2;
-    valuetable2 =(int64_t*) malloc(sizeof(int64_t)*(siglen + 1));
+    valuetable2 = (int64_t*)malloc(sizeof(int64_t)*(siglen + 1));
     j = 0;
     i = 0;
     valuetable2[0] = nkmers;
     while (i < nkmers && j < siglen) {
-        if (valuetable[i] % mod == 0) {
-            valuetable2[j + 1] = valuetable[i];
-            j++;
-        }
+        valuetable2[j + 1] = valuetable[i];
+        j++;
         i++;
     }
     free(valuetable);

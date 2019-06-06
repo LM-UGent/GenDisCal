@@ -59,6 +59,8 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
     args_add(result, "taxonomy", 't', "str,str");
     args_add(result, "histogram", 'g', "float");
     args_add(result, "distancematrix", 'x', "");
+    args_add(result, "ordered", 'd', "");
+    args_add(result, "sort_by_distance", 'r', "");
     args_add(result, "below", 'w', "float");
     args_add(result, "above", 'v', "float");
     args_add(result, "only", 'y', "str");
@@ -105,6 +107,11 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "    TETRA is suitable to conclude whether two genomes belong to the same\n"
         "    species.\n"
         "    The ambiguity region for the results is [0.0005-0.005]\n"
+        " > approxANI (-b bias 4 -m corr)\n"
+        "    approxANI is a minhash-based approximation of Average Nucleotide\n"
+        "    Identity (ANI). This method is similar to the one used by the \n"
+        "    Mash software (Ondov et al., Gen. biol., 2016) "
+        "    The ambiguity region for species is [0.04-0.06]\n"
  /*       " > program:<file> (no equivalent)\n"
         "    This will run an external program and format the result based on the remaining arguments."
         "    <file> should be formatted as follows:\n"
@@ -137,9 +144,15 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "matches the expected taxonomical relation. The first argument should be the path to the "
         "taxonomy file, while the second should be the taxonomy format. Possible formats are:\n"
         "  PCOF_S  -- filename,PhylumClassOrderFamily_Genus_species_etc (default)\n"
-        "  semicol -- filename;Phylum;Class;Order;Family;Genus;species;etc\n"
-        "  pipe    -- filename | Phylum | Class | Order | Family | Genus | Species | etc\n",
+        /*"  semicol -- filename;Phylum;Class;Order;Family;Genus;species;etc\n"*/
+        /*"  pipe    -- filename | Phylum | Class | Order | Family | Genus | Species | etc\n"*/,
         "taxonomy file");
+    args_add_help(result, "ordered", "FORCE ORDERED OUTPUT",
+        "If this option is present, the output will be forcefully ordered. This has no effect "
+        "on histogram and distance matrix output, but will ensure that the order in normal "
+        "output mode stays consistent across multiple runs when using more than one thread.\n"
+        "This comes at the cost of higher RAM usage.\n",
+        "force ordered output");
     args_add_help(result, "histogram", "HISTOGRAM OUTPUT",
         "If this option is present, the output will be a multi-column histogram with the specified "
         "bin width (default: 0.001) instead of a list of comparisons. Rows represent bins, whereas "
@@ -151,6 +164,10 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "comparisons.\n"
         "The output format is a always a comma-separated file.\n",
         "enable distance matrix output");
+    args_add_help(result, "sort_by_distance", "SORT BY DISTANCE",
+        "Sort output table according to distance. Automatically sets the --ordered flag when used. "
+        "Ignored when --distancematrix or --histogram is specified (default: no)\n",
+        "Sort output table according to distance");
     args_add_help(result, "below", "VALUES BELOW A GIVEN VALUE",
         "Only report values below the specified value. (default:infinity)\n",
         "Only report values below the specified value");
@@ -724,6 +741,7 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
 #define OUTPUTMODE_NORMAL   0
 #define OUTPUTMODE_MATRIX   1
 #define OUTPUTMODE_HIST     2
+#define OUTPUTMODE_ORDERED  3
 int strtotaxsim(const char* str) {
     if (strcmp(str, "?") == 0)return 0;
     if (strcmp(str, "Different_Phyla") == 0)return 0;
@@ -763,6 +781,77 @@ char* taxsimtostr(int val) {
 }
 
 
+char* GenDisCal_ordered_output_gen_line(signature_t** signatures,size_t fileA, size_t fileB, int simlevel) {
+    char* filename1;
+    char* filename2;
+    char* output;
+    char* simlevelstr;
+    size_t k;
+    simlevelstr = taxsimtostr(simlevel);
+    if (signatures[fileA] && signatures[fileA]->fname) filename1 = signatures[fileA]->fname;
+    else filename1 = "<File could not opened>";
+    if (signatures[fileB] && signatures[fileB]->fname) filename2 = signatures[fileB]->fname;
+    else filename2 = "<File could not opened>";
+    k = strlen(filename1) + strlen(filename2) + strlen(taxsimtostr(simlevel)) + 3;
+    output = malloc(k);
+#ifdef _WIN32
+    sprintf_s(output, k, "%s,%s,%s", filename1, filename2, simlevelstr);
+#else
+    sprintf(output, "%s,%s,%s", filename1, filename2, simlevelstr);
+#endif
+    output[k - 1] = 0;
+    return output;
+}
+
+/* the amount of arguments for this function is a bit excessive*/
+void GenDisCal_print_ordered_output(
+        size_t orderedamount, int* ocmp_types, double* ocmp_results, size_t nfiles,
+        int issearch, int sort_by_distance, PF_t* outputf, signature_t** signatures
+    ) {
+    size_t i, j, k, n;
+    char** outputlines;
+    size_t offset;
+    PFprintf(outputf, "File1,File2,Expected_Relation,Distance\n");
+    n = 0;
+    for (j = 0;j < orderedamount;j++) {
+        if (ocmp_types[j] != -3)n++;
+    }
+    outputlines = (char**)calloc(n, sizeof(char*));
+    k = 0;
+    if (issearch) {
+        for (j = 0;j < orderedamount;j++) {
+            if (ocmp_types[j] != -3) {
+                outputlines[k] = GenDisCal_ordered_output_gen_line(signatures, nfiles, j, ocmp_types[j]);
+                ocmp_types[k] = ocmp_types[j];
+                ocmp_results[k] = ocmp_results[j];
+                k++;
+            }
+        }
+    }
+    else {
+        for (i = 0;i < nfiles;i++) {
+            offset = i*nfiles + 1 - (i + 1)*(i + 2) / 2;
+            for (j = i + 1; j < nfiles;j++) {
+                if (ocmp_types[offset + j - 1] != -3) {
+                    outputlines[k] = GenDisCal_ordered_output_gen_line(signatures, i, j, ocmp_types[offset + j - 1]);
+                    ocmp_types[k] = ocmp_types[j];
+                    ocmp_results[k] = ocmp_results[j];
+                    k++;
+                }
+            }
+        }
+    }
+    if (sort_by_distance)
+        vec_sort_by(outputlines, sizeof(char*), ocmp_results, n);
+    for (j = 0;j < n;j++) {
+        PFprintf(outputf, "%s,%f\n", outputlines[j], ocmp_results[j]);
+        free(outputlines[j]);
+    }
+    free(outputlines);
+    free(ocmp_results);
+    free(ocmp_types);
+}
+
 int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t nfiles, size_t sig_len, int numthreads) {
     method_function mf;
     double metharg;
@@ -773,25 +862,37 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
     double maxval;
     int onlylevel;
     int issearch;
+    int sort_by_distance;
+    double* ocmp_results;
+    int* ocmp_types;
     datatable_t* otable;
     PF_t* outputf;
     size_t i,n;
     size_t* p_n;
     size_t nfsquare;
     size_t countsperproc;
-    
+    size_t orderedamount;
     /* parse relevant arguments */
     nocalc = set_method_function(args, &mf, &metharg);
     args_report_info(NULL, "Method function selected successfully\n", numthreads);
     
     outputmode = OUTPUTMODE_NORMAL;
+    ocmp_results = NULL;
+    ocmp_types = NULL;
+    sort_by_distance = args_ispresent(args, "sort_by_distance");
+    if (args_ispresent(args, "ordered") || sort_by_distance) {
+        outputmode = OUTPUTMODE_ORDERED;
+    }
     if (args_ispresent(args, "distancematrix"))
         outputmode = OUTPUTMODE_MATRIX;
     if (args_ispresent(args, "histogram")) {
         outputmode = OUTPUTMODE_HIST;
         binwidth = args_getdouble(args, "histogram", 0, 0.001);
     }
-
+    
+    if (outputmode == OUTPUTMODE_ORDERED) {
+        args_report_info(NULL, "Output mode: ORDERED\n");
+    }
     if (outputmode == OUTPUTMODE_NORMAL) {
         args_report_info(NULL, "Output mode: NORMAL\n");
     }
@@ -815,8 +916,16 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
             outputmode = OUTPUTMODE_NORMAL;
         nfiles--;
         args_report_info(NULL, "Search mode is enabled\n");
+        orderedamount = nfiles;
     }
-    else issearch = 0;
+    else {
+        issearch = 0;
+        orderedamount = nfiles*(nfiles - 1) / 2;
+    }
+    if (outputmode == OUTPUTMODE_ORDERED) {
+        ocmp_results = (double*)malloc(sizeof(double)*orderedamount);
+        ocmp_types = (int*)malloc(sizeof(int)*orderedamount);
+    }
 
     PFopen(&outputf, args_getstr(args, "output", 0, "stdout"),"w");
     if (!outputf) {
@@ -854,11 +963,14 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
         omp_set_num_threads(numthreads);
         n = 0;
         p_n = &n;
-        nfsquare = nfiles*nfiles/2;
+        nfsquare = nfiles*(nfiles - 1) / 2;
         countsperproc = (nfiles / numthreads);
         if (countsperproc*numthreads < nfiles)
             countsperproc++;
         args_report_info(NULL, "Each thread handles " _LLD_ " files\n", countsperproc);
+        if (outputmode == OUTPUTMODE_NORMAL) {
+            PFprintf(outputf, "File1,File2,Expected_Relation,Distance\n");
+        }
         #ifndef NOOPENMP
         #pragma omp parallel
         #endif
@@ -875,70 +987,38 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
             size_t firstf = cthread;
             size_t lastf = nfiles;
             size_t tmp1;
+            size_t ordered_offset=0;
             if (firstf > nfiles) firstf = nfiles;
             for (ifl_added = firstf;ifl_added < lastf;ifl_added += numthreads) {
                 if (outputmode == OUTPUTMODE_MATRIX) {
                     datatable_set(otable, ifl_added, ifl_added, 0.0);
                 }
                 if (issearch) {
-                    if (signatures[ifl_added] && signatures[nfiles])
-                        dist = mf((double*)(signatures[ifl_added]->data), (double*)(signatures[nfiles]->data), sig_len, metharg);
-                    else
-                        dist = 1.0;
-                    simlevel = signature_taxsimlevel(signatures[ifl_added], signatures[nfiles]);
-                    if ((onlylevel < -1 || simlevel == onlylevel) && dist >= minval && dist <= maxval) {
-                        if (outputmode == OUTPUTMODE_NORMAL) {
-                            if (signatures[ifl_added] && signatures[ifl_added]->fname) fn1 = signatures[ifl_added]->fname;
-                            else fn1 = "<File could not opened>";
-                            if (signatures[nfiles] && signatures[nfiles]->fname) fn2 = signatures[nfiles]->fname;
-                            else fn2 = "<File could not opened>";
-                            #pragma omp critical
-                            PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
-                        }
-                        else if (outputmode == OUTPUTMODE_HIST) {
-                            if (dist >= 0.0) {
-                                tmp1 = (size_t)round(dist / binwidth);
-                                #pragma omp critical
-                                {
-                                    nullflag = 0;
-                                    oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
-                                    if (nullflag)
-                                        oldval = 0.0;
-                                    datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
-                                }
-                            }
-                        }
-                        else if (outputmode == OUTPUTMODE_MATRIX) {
-                            datatable_set(otable, ifl_added, nfiles, dist);
-                            datatable_set(otable, nfiles, ifl_added, dist);
-                        }
-                        #pragma omp atomic
-                        (*p_n)++;
-                        if (nfsquare < 100 || (*p_n) % (nfiles / 100) == 0) {
-                            #pragma omp critical
-                            args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) files compared\r", (*p_n), nfiles, (int)(((double)n * 100) / (double)nfiles));
-                        }
+                    if (outputmode == OUTPUTMODE_ORDERED) {
+                        ocmp_types[ifl_added] = -3;
                     }
-                }
-                else {
-                    for (ifl_c = ifl_added + 1; ifl_c < nfiles;ifl_c++) {
-                        if (signatures[ifl_added] && signatures[ifl_c])
-                            dist = mf((double*)(signatures[ifl_added]->data), (double*)(signatures[ifl_c]->data), sig_len, metharg);
+                    simlevel = signature_taxsimlevel(signatures[ifl_added], signatures[nfiles]);
+                    if (onlylevel < -1 || simlevel == onlylevel) {
+                        if (signatures[ifl_added] && signatures[nfiles])
+                            dist = mf((double*)(signatures[ifl_added]->data), (double*)(signatures[nfiles]->data), sig_len, metharg);
                         else
                             dist = 1.0;
-                        simlevel = signature_taxsimlevel(signatures[ifl_added], signatures[ifl_c]);
-                        if ((onlylevel < -1 || simlevel == onlylevel) && dist >= minval && dist <= maxval) {
+                        if (dist >= minval && dist <= maxval) {
                             if (outputmode == OUTPUTMODE_NORMAL) {
                                 if (signatures[ifl_added] && signatures[ifl_added]->fname) fn1 = signatures[ifl_added]->fname;
                                 else fn1 = "<File could not opened>";
-                                if (signatures[ifl_c] && signatures[ifl_c]->fname) fn2 = signatures[ifl_c]->fname;
+                                if (signatures[nfiles] && signatures[nfiles]->fname) fn2 = signatures[nfiles]->fname;
                                 else fn2 = "<File could not opened>";
                                 #pragma omp critical
                                 PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
                             }
+                            if (outputmode == OUTPUTMODE_ORDERED) {
+                                ocmp_results[ifl_added] = dist;
+                                ocmp_types[ifl_added] = simlevel;
+                            }
                             else if (outputmode == OUTPUTMODE_HIST) {
                                 if (dist >= 0.0) {
-                                    tmp1 = (size_t)floor(dist / binwidth);
+                                    tmp1 = (size_t)round(dist / binwidth);
                                     #pragma omp critical
                                     {
                                         nullflag = 0;
@@ -950,17 +1030,75 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
                                 }
                             }
                             else if (outputmode == OUTPUTMODE_MATRIX) {
-                                #pragma omp critical
-                                {
-                                    datatable_set(otable, ifl_added, ifl_c, dist);
-                                    datatable_set(otable, ifl_c, ifl_added, dist);
-                                }
+                                datatable_set(otable, ifl_added, nfiles, dist);
+                                datatable_set(otable, nfiles, ifl_added, dist);
                             }
                             #pragma omp atomic
                             (*p_n)++;
-                            if (nfsquare < 100 || (*p_n) % (nfsquare / 100) == 0) {
-                                #pragma omp critical
-                                args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) comparisons performed\r", (*p_n), nfsquare, (int)(((double)n * 100) / (double)nfsquare));
+                            if (nfiles < 100 || (*p_n) % (nfiles / 100) == 0) {
+                            #pragma omp critical
+                                args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) files compared\r", (*p_n), nfiles, (int)(((double)n * 100) / (double)nfiles));
+                            }
+                        }
+                    }
+                }
+                else {
+                    ordered_offset = 1 + ifl_added*nfiles - (ifl_added + 1)*(ifl_added+2)/2;
+                    /* note: ordered_offset cannot be negative, but the above expression would return -1 for ifl_added == 0
+                     *       this is why "1+" is added at the beginning of the expression and subtracted later.
+                     *       While not doing either step should still work in theory, since all the variables involved have
+                     *       the same size, this approach was preferred to avoid potential problems if this were to change,
+                     *       since (uint32_t)(-1) != (uint64_t)(-1), for example.
+                     */
+                    for (ifl_c = ifl_added + 1; ifl_c < nfiles;ifl_c++) {
+                        if (outputmode == OUTPUTMODE_ORDERED)
+                            ocmp_types[ifl_c + ordered_offset - 1] = -3;
+                        simlevel = signature_taxsimlevel(signatures[ifl_added], signatures[ifl_c]);
+                        if (onlylevel < -1 || simlevel == onlylevel) {
+                            if (signatures[ifl_added] && signatures[ifl_c])
+                                dist = mf((double*)(signatures[ifl_added]->data), (double*)(signatures[ifl_c]->data), sig_len, metharg);
+                            else
+                                dist = 1.0;
+                            if (dist >= minval && dist <= maxval) {
+                                if (outputmode == OUTPUTMODE_NORMAL) {
+                                    if (signatures[ifl_added] && signatures[ifl_added]->fname) fn1 = signatures[ifl_added]->fname;
+                                    else fn1 = "<File could not opened>";
+                                    if (signatures[ifl_c] && signatures[ifl_c]->fname) fn2 = signatures[ifl_c]->fname;
+                                    else fn2 = "<File could not opened>";
+                                    #pragma omp critical
+                                    PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
+                                }
+                                if (outputmode == OUTPUTMODE_ORDERED) {
+                                    /* see above note for an explanation as to -1 is present here */
+                                    ocmp_results[ifl_c+ordered_offset-1] = dist;
+                                    ocmp_types[ifl_c+ordered_offset-1] = simlevel;
+                                }
+                                else if (outputmode == OUTPUTMODE_HIST) {
+                                    if (dist >= 0.0) {
+                                        tmp1 = (size_t)floor(dist / binwidth);
+                                        #pragma omp critical
+                                        {
+                                            nullflag = 0;
+                                            oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
+                                            if (nullflag)
+                                                oldval = 0.0;
+                                            datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                                        }
+                                    }
+                                }
+                                else if (outputmode == OUTPUTMODE_MATRIX) {
+                                    #pragma omp critical
+                                    {
+                                        datatable_set(otable, ifl_added, ifl_c, dist);
+                                        datatable_set(otable, ifl_c, ifl_added, dist);
+                                    }
+                                }
+                                #pragma omp atomic
+                                (*p_n)++;
+                                if (nfsquare < 100 || (*p_n) % (nfsquare / 100) == 0) {
+                                    #pragma omp critical
+                                    args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) comparisons performed\r", (*p_n), nfsquare, (int)(((double)n * 100) / (double)nfsquare));
+                                }
                             }
                         }
                     }
@@ -969,7 +1107,7 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
         }
         args_report_progress(NULL, "A Total of " _LLD_ " comparisons were performed                        \n", n);
     }
-    if (otable) {
+    if (!nocalc && otable) {
         if (outputmode == OUTPUTMODE_HIST) {
             n = datatable_ncols(otable) - 1;
             for (i = 0;i < n;i++) {
@@ -985,10 +1123,12 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
             datatable_write(otable, outputf, ",", DATATABLE_WRITECOLNAMES | DATATABLE_WRITEROWNAMES);
         }
     }
+    if (!nocalc && outputmode == OUTPUTMODE_ORDERED) {
+        GenDisCal_print_ordered_output(orderedamount, ocmp_types, ocmp_results, nfiles, issearch, sort_by_distance, outputf, signatures);
+    }
     /* cleanup */
     PFclose(outputf);
     if (otable)datatable_free(otable);
-
     return 0;
 }
 
@@ -1022,6 +1162,8 @@ int GenDisCal(args_t* args) {
     return 0;
 }
 
+#if TEST
+#else
 int main(int argc, char** argv) {
     args_t* args;
     int result;
@@ -1034,3 +1176,4 @@ int main(int argc, char** argv) {
 #endif
     return result;
 }
+#endif

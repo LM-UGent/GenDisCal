@@ -240,8 +240,8 @@ void _vec_quicksorti64(int64_t* target, size_t len) {
         return;
     }
 
-    pivot = (len+1)/2;
-    pivotvalue = target[pivot-1];
+    pivot = (len+1)/2-1;
+    pivotvalue = target[pivot];
     tmp = 0;
 
     if (target[pivot] < target[0]) {
@@ -267,11 +267,57 @@ void _vec_quicksorti64(int64_t* target, size_t len) {
             while (target[i] < pivotvalue)i++;
             while (j>0 && target[j] > pivotvalue)j--;
         }
-        pivot = i;
-        _vec_quicksorti64(target, pivot);
-        _vec_quicksorti64(target + pivot, len - pivot);
     }
+    pivot = i;
+    _vec_quicksorti64(target, pivot);
+    _vec_quicksorti64(target + pivot, len - pivot);
 }
+size_t _vec_quicksorti64_nofollowup(int64_t* target, size_t len) {
+    size_t pivot;
+    int64_t pivotvalue;
+    int64_t tmp;
+    size_t i, j;
+
+    if (len < 2) return 0;
+    if (len == 2) {
+        if (target[0] > target[1]) {
+            arrswapids(target, 0, 1, tmp);
+        }
+        return 0;
+    }
+
+    pivot = (len + 1) / 2 - 1;
+    pivotvalue = target[pivot];
+    tmp = 0;
+
+    if (target[pivot] < target[0]) {
+        arrswapids(target, 0, pivot, tmp);
+    }
+    if (target[len - 1] < target[0]) {
+        arrswapids(target, 0, len - 1, tmp);
+    }
+    if (target[pivot] < target[len - 1]) {
+        arrswapids(target, pivot, len - 1, tmp);
+    }
+    pivotvalue = target[len - 1];
+
+    i = 0;
+    j = len - 1;
+    while (target[i] < pivotvalue)i++;
+    while (j>0 && target[j] >= pivotvalue)j--;
+    if (i < j) {
+        while (i < j) {
+            arrswapids(target, i, j, tmp);
+            i++;
+            if (j>0)j--;
+            while (target[i] < pivotvalue)i++;
+            while (j>0 && target[j] > pivotvalue)j--;
+        }
+    }
+    pivot = i;
+    return pivot;
+}
+
 void _vec_heapifyi64(int64_t* target, size_t len, size_t node) {
     size_t newroot = node;
     size_t left, right;
@@ -289,14 +335,14 @@ void _vec_heapifyi64(int64_t* target, size_t len, size_t node) {
 }
 void _vec_sort__wdepthi64(int64_t* target, size_t len, size_t depth, size_t maxdepth) {
     size_t pivot;
-    int64_t pivotvalue;
     int64_t tmp;
     size_t i, j, k;
 
-    if (len < 16) {
+    if (len < 8) {
+        /* insertion sort */
         for (i = 1;i < len;i++) {
             j = i;
-            while (j > 0 && target[j] < target[j - 1])
+            while (j > 0 && target[i] < target[j - 1])
                 j--;
             tmp = target[i];
             for (k = i;k > j;k--) {
@@ -306,26 +352,17 @@ void _vec_sort__wdepthi64(int64_t* target, size_t len, size_t depth, size_t maxd
         }
     }
     else if (depth<maxdepth) {
-        pivot = 1;
-        pivotvalue = target[0];
-        for (i = 1;i < len; i++) {
-            if (target[i] <= pivotvalue) {
-                arrswapids(target, i, pivot, tmp);
-                pivot++;
-            }
-        }
-        if (pivot == len) {
-            pivot--;
-            arrswapids(target, 0, pivot, tmp);
-        }
-        _vec_quicksorti64(target, pivot);
-        _vec_quicksorti64(target + pivot, len - pivot);
+        pivot = _vec_quicksorti64_nofollowup(target, len);
+        _vec_sort__wdepthi64(target, pivot, depth+1, maxdepth);
+        _vec_sort__wdepthi64(target + pivot, len - pivot, depth + 1, maxdepth);
     }
     else {
-        for (i = len / 2 - 1; i >= 0; i--) {
+        /* note i is unsigned, so if it ever gets bigger than its starting value,
+           that means it's reached 0 */
+        for (i = len / 2 - 1; i < len; i--) {
             _vec_heapifyi64(target, len, i);
         }
-        for (i = len - 1; i >= 0; i--) {
+        for (i = len - 1; i < len; i--) {
             arrswapids(target, 0, i, tmp);
             _vec_heapifyi64(target, i, 0);
         }
