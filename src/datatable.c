@@ -109,6 +109,34 @@ double datatable_get(datatable_t* target, size_t col, size_t row, int* nullflag)
     return target->values[row][col];
 }
 
+void datatable_addtables(datatable_t* target, datatable_t** toadd, size_t numtables) {
+    size_t i,j,k;
+    double newvalue;
+    size_t targcol;
+    size_t targrow;
+    char* name;
+    int nf;
+    for (i = 0;i < numtables;i++) {
+        for (j = 0;j < datatable_nrows(toadd[i]);j++) {
+            name = datatable_getrowname(toadd[i], j);
+            if (name)
+                targrow = datatable_getrowid(target, name);
+            else
+                targrow = j;
+            for (k = 0;k < datatable_ncols(toadd[i]);k++) {
+                name = datatable_getcolname(toadd[i], k);
+                if (name)
+                    targcol = datatable_getcolid(target, name);
+                else
+                    targcol = k;
+                newvalue = datatable_get(target, targcol, targrow, &nf);
+                newvalue += datatable_get(toadd[i], k, j, &nf);
+                datatable_set(target,targcol, targrow, newvalue);
+            }
+        }
+    }
+}
+
 void datatable_setcolname(datatable_t* target, size_t col, const char* name) {
     size_t namelen;
     _datatable_addcolsupto(target, col);

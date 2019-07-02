@@ -25,7 +25,24 @@ double nucfreq(nucseq* src, int nuc) {
     }
     return ((double)numfound) / ((double)numnuc);
 }
-
+#ifndef PI
+#define PI (atan(1)*4)
+#endif
+double gaussianbell(double mu, double sigma, double x) {
+    double normpos;
+    double var;
+    normpos = x - mu;
+    var = sigma*sigma;
+    return exp(-(normpos*normpos)/(2*var))/sqrt(2*PI*var);
+}
+double cut_gaussianbell(double mu, double sigma, double x, double outlier_range) {
+    double gaussvalue;
+    double outliervalue;
+    gaussvalue = gaussianbell(mu, sigma, x);
+    outliervalue = gaussianbell(mu, sigma, mu + outlier_range*sigma);
+    if (outliervalue > gaussvalue) return 0;
+    else return gaussvalue - outliervalue;
+}
 // bases
 size_t freqn(nucseq* sequence, int n, double** result) { // n-mer frequency signature
     int32_t* counts;
@@ -147,6 +164,28 @@ size_t multifreq(nucseq* sequence, int n, double** result) {
 size_t minhashsig(nucseq* sequence, int n, double** result) {
     *result = (double*) minhash_Msig(&sequence, 1, n, SIGLEN_MINHASH, 200000);
     return SIGLEN_MINHASH;
+}
+
+size_t combinedsig(nucseq * sequence, int n, double ** result)
+{
+    double *K4;
+    double *K6;
+    double *minhash;
+    size_t numel4, numel6, numelm;
+    double* tmpres;
+    numel4 = karsn(sequence, 4, &K4);
+    numel6 = karsn(sequence, 6, &K6);
+    numelm = minhashsig(sequence, 31, &minhash);
+    tmpres = malloc(sizeof(double)*(numel4 + numel6) + sizeof(int64_t)*numelm);
+    *result = tmpres;
+    memcpy(tmpres, K4, sizeof(double)*(numel4));
+    memcpy(tmpres + numel4, K6, sizeof(double)*(numel6));
+    memcpy(tmpres + numel4 + numel6, minhash, sizeof(int64_t)*(numelm));
+    *result = tmpres;
+    free(K4);
+    free(K6);
+    free(minhash);
+    return (sizeof(double)*(256 + 4096) + sizeof(int64_t)*SIGLEN_MINHASH);
 }
 
 // methods
@@ -453,13 +492,11 @@ double multifreqdist(double* sig1, double* sig2, size_t veclen, double threshold
     free(dists);
     return result;
 }
-static inline double resemblance2ANI(double v, double k) {
+static inline double resemblance2ANI(double v, double k, double genomesize) {
     if (v == 0.0)return 0;
-    return 1.0 + log(v * 2 / (1 + v)) / k;
+    return 1.0+log(v*2/(1+v))/k;
 }
 double approxANI(double* sig1, double* sig2, size_t veclen, double k) {
-    /* Fan et al., An assembly and alignment-free method of phylogeny reconstruction from next-generation sequencing data, 2015 */
-    /* Ondov et al., Mash: fast genome and metagenome distance estimation using MinHash, 2016 */
     int64_t* s1;
     int64_t* s2;
     size_t i,j;
@@ -485,5 +522,54 @@ double approxANI(double* sig1, double* sig2, size_t veclen, double k) {
         AunionB++;
     }
     resemblance = ((double)AinterB) / ((double)AunionB);
-    return 1-resemblance2ANI(resemblance, k);
+    return 1-resemblance2ANI(resemblance, k, (double)((s1[0]+s2[0])/2));
+}
+
+double combinedSpecies(double* sig1, double* sig2, size_t veclen, double k)
+{
+    /* For PaSiT4, the distributions are modelled as normals, with parameters mu and sigma:
+         	Species	Genus	Family	Order	Class	Phylum	Kingdom
+       MU	0.17	0.75	0.82	0.85	0.87	0.89	0.89
+    SIGMA	0.079	0.083	0.068	0.051	0.039	0.036	0.031
+       We consider that Same Species, Same Genus or Different Genus are equally likely to occur,
+       and approximate "Different Genus" as the "Same Family" distribution in this case
+       
+       For ANI, the following values were used
+         	Species	Different species
+       MU	0.02	0.15	0.20
+    SIGMA	0.01	0.03	0.10
+       The "Different Species" distirbution is a bit difficult to evaluate in this case so
+       the value is somewhat arbitrary
+    */
+    double* K4A;
+    double* K6A;
+    double* minhashA;
+    double* K4B;
+    double* K6B;
+    double* minhashB;
+    double PaSiT4value, PaSiT4conclusion;
+    double minhashvalue, minhashconclusion;
+    double spweight, gweight, ngweight;
+    
+    K4A = sig1;
+    K4B = sig2;
+    K6A = sig1+256;
+    K6B = sig2+256;
+    minhashA = sig1+4096+256;
+    minhashB = sig2+4096+256;
+
+    PaSiT4value = SVC(K4A, K4B, 256, 0.02);
+    spweight = cut_gaussianbell(0.17, 0.079, PaSiT4value, 5);
+    gweight = cut_gaussianbell(0.74, 0.083, PaSiT4value, 5);
+    ngweight = cut_gaussianbell(0.82, 0.068, PaSiT4value, 5);
+    PaSiT4conclusion = spweight / (spweight + gweight + ngweight);
+
+    minhashvalue = approxANI(minhashA, minhashB, SIGLEN_MINHASH, k);
+    spweight = gaussianbell(0.02, 0.01, minhashvalue);
+    gweight = gaussianbell(0.15, 0.025, minhashvalue);
+    minhashconclusion = spweight / (spweight + gweight*2);
+    /*
+    Weights were derived from the Matthew's corelation coeffcient
+    */
+    return 1 - (0.76*minhashconclusion + 0.74*PaSiT4conclusion)/(0.76+0.74);
 }

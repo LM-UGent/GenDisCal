@@ -14,6 +14,8 @@ size_t datatable_nrows(datatable_t* target);
 errcode_t datatable_set(datatable_t* target, size_t col, size_t row, double value);
 double datatable_get(datatable_t* target, size_t col, size_t row, int* nullflag);
 
+void datatable_addtables(datatable_t* target, datatable_t** toadd, size_t numtables);
+
 void datatable_setcolname(datatable_t* target, size_t col, const char* name);
 size_t datatable_getcolid(datatable_t* target, const char* name);
 char* datatable_getcolname(datatable_t* target, size_t col);

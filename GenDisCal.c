@@ -65,7 +65,7 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
     args_add(result, "above", 'v', "float");
     args_add(result, "only", 'y', "str");
     args_add(result, "filtershort", 'l', "int");
-    args_add(result, "keepsigs", 'k', "");
+    args_add(result, "keepsigs", 'k',"str");
 #ifndef NOOPENMP
     args_add(result, "nprocs", 'n', "int");
 #endif
@@ -80,7 +80,7 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         /*"   bias <k>   -- use <k>-mer bias with regards to <k-1>-mer composition\n"*/
         "For single-stranded DNA and RNA, alternative versions of these functions are provided, "
         "beginning with 's_', as follows:\n"
-        "   s_freq, s_karl, s_exp, s_bias\n",
+        "   s_freq, s_karl, s_exp\n",
         "signature basis to be used");
     args_add_help(result, "method", "DISTANCE COMPUTATION METHOD",
         "Distance computation methods are used to compute the dissimilarity between genome signatures."
@@ -195,7 +195,11 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "Indicates the minimum contig length to keep.");
     args_add_help(result, "keepsigs", "KEEP SIGNATURES",
         "If this option is present, a signature file will be generated for re-use, named "
-        "<filename>.sig.",
+        "<filename>.sig for individual signature files, and <filename>.sdb for multiple "
+        "signature files. The argument specifies whether or not the comparisons should "
+        "still be performed after this step:\n"
+        "  continue : perform comparisons after creating signature files (default)\n"
+        "  stop     : abort the program creating signature files\n",
         "generate signature files");
 #ifndef NOOPENMP
     args_add_help(result, "nprocs", "NUMBER OF PROCESSOR CORES TO USE",
@@ -281,6 +285,7 @@ typedef struct signature_t {
     char* fname;
     int64_t lineage[9];
     int freefname;
+    size_t multicount;
 } signature_t;
 #define LINEAGE_PHYLUM      0
 #define LINEAGE_CLASS       1
@@ -298,7 +303,16 @@ signature_t* signature_alloc() {
     return result;
 }
 void signature_free(signature_t* target) {
+    size_t i;
+    signature_t** demux;
     if (target) {
+        if (target->multicount > 0) {
+            demux = (signature_t**)(target->data);
+            for (i = 0;i < target->multicount;i++) {
+                signature_free(demux[i]);
+            }
+            target->multicount = 0;
+        }
         if (target->data)free(target->data);
         if (target->fname && target->freefname) free(target->fname);
         target->data = NULL;
@@ -315,7 +329,27 @@ int signature_taxsimlevel(signature_t* A, signature_t* B) {
         i++;
     return i;
 }
-
+signature_t* signature_multiplex(signature_t** signatures, size_t count) {
+    signature_t* res;
+    res = signature_alloc();
+    res->data = signatures;
+    res->multicount = count;
+    return res;
+}
+signature_t** signature_demultiplex(signature_t* source) {
+    signature_t** res;
+    res = (signature_t**)(source->data);
+    source->data = NULL;
+    source->multicount = 0;
+    source->len = 0;
+    return res;
+}
+int signature_is_multiplexed(signature_t* target) {
+    return target->multicount != 0;
+}
+size_t signature_get_multiplex_amount(signature_t* target) {
+    return target->multicount;
+}
 int set_basis_function(args_t* args, basis_function* bf, size_t* sig_len, size_t* kmer_len) {
     size_t maxi, i;
     size_t kmerlen;
@@ -344,7 +378,12 @@ int set_basis_function(args_t* args, basis_function* bf, size_t* sig_len, size_t
         }
         else if (strcmp(presetstr, "approxANI") == 0) {
             *bf = minhashsig;
-            kmerlen = 31;
+            kmerlen = 21;
+            *sig_len = SIGLEN_MINHASH;
+        }
+        else if (strcmp(presetstr, "combinedSpecies") == 0) {
+            *bf = combinedsig;
+            kmerlen = 21;
             *sig_len = SIGLEN_MINHASH;
         }
         else {
@@ -441,7 +480,11 @@ int set_method_function(args_t* args, method_function* mf, double* metharg) {
         }
         else if (strcmp(presetstr, "approxANI") == 0) {
             *mf = approxANI;
-            *metharg = 31.0;
+            *metharg = 21.0;
+        }
+        else if (strcmp(presetstr, "combinedSpecies") == 0) {
+            *mf = combinedSpecies;
+            *metharg = 21.0;
         }
         else {
             args_report_warning(NULL, "Unknown preset <%s>, using default method: <PaSiT 0.02>\n", presetstr);
@@ -506,21 +549,57 @@ double* readsig_fromfile(PF_t* source, size_t* sl) {
     *sl = (size_t)n;
     return data;
 }
+void read_sigmeta_from_file(PF_t* source, signature_t* sig) {
+    int64_t fnamelen;
+    /* it is assumed that the file's endianness matches that of the OS */
+    fnamelen = PFgetint64(source);
+    if (fnamelen > 0) {
+        sig->fname = malloc(sizeof(char)*(fnamelen + 1));
+        sig->fname[fnamelen] = 0;
+        sig->freefname = 1;
+        PFread(sig->fname, sizeof(char), fnamelen, source);
+    }
+}
 signature_t* read_sig_file(char* filename) {
     signature_t* res;
     PF_t* f;
     size_t n;
     res = signature_alloc();
-    PFopen(&f, filename, "r");
+    PFopen(&f, filename, "rb");
     if (f) {
         res->fname = os_rmdirname(filename);
         res->data = (void*)readsig_fromfile(f, &n);
         res->len = n;
+        read_sigmeta_from_file(f, res);
         PFclose(f);
     }
     return res;
 }
-
+signature_t* read_multisig_file_as_multiplexed(char* filename, int64_t maxcount) {
+    signature_t* res;
+    signature_t** resarray;
+    PF_t* f;
+    size_t n;
+    int64_t cursig;
+    int64_t fcount;
+    res = NULL;
+    PFopen(&f, filename, "rb");
+    if (f) {
+        fcount = (size_t)PFgetint64(f);
+        resarray = calloc((size_t)fcount, sizeof(signature_t*));
+        if (fcount > maxcount)fcount = maxcount;
+        for (cursig = 0; cursig < fcount;cursig++) {
+            res = signature_alloc();
+            res->data = (void*)readsig_fromfile(f, &n);
+            res->len = n;
+            read_sigmeta_from_file(f, res);
+            resarray[cursig] = res;
+        }
+        res = signature_multiplex(resarray, fcount);
+        PFclose(f);
+    }
+    return res;
+}
 signature_t* get_signature_from_fasta(char* filename, basis_function basis, int nlen, size_t minseqlen) {
     PF_t* f;
     nucseq** nsa;
@@ -558,13 +637,18 @@ signature_t* get_signature_from_fasta(char* filename, basis_function basis, int 
 signature_t* get_signatures(char* filename, basis_function basis, int nlen, size_t minseqlen) {
     if (endswith(".sig", filename))
         return read_sig_file(filename);
+    else if (endswith(".sdb", filename)) {
+        return read_multisig_file_as_multiplexed(filename, 100000000);
+    }
     else
         return get_signature_from_fasta(filename, basis, nlen, minseqlen);
 
 }
+
 void write_signature(PF_t* target, signature_t* source) {
     int32_t type;
     int32_t datatype; /* NOTE: datatype is ignored - values are assumed to be stored as double */
+    uint64_t fnamelen;
     datatype = 1;
     type = 1;
     /* it is assumed that the file's endianness matches that of the OS */
@@ -572,6 +656,12 @@ void write_signature(PF_t* target, signature_t* source) {
     PFwrite(&datatype, sizeof(int32_t), 1, target);
     PFwrite(&(source->len), sizeof(uint64_t), 1, target);
     PFwrite(source->data, sizeof(double), source->len, target);
+    if (source->fname) {
+        /* inserted a the end to maintain portability */
+        fnamelen = strlen(source->fname);
+        PFputint64(target,fnamelen);
+        PFwrite(source->fname, 1, strlen(source->fname), target);
+    }
 }
 void write_sigfile(const char* basename, signature_t* source) {
     PF_t* f;
@@ -585,21 +675,42 @@ void write_sigfile(const char* basename, signature_t* source) {
     newname[baselen + 2] = 'i';
     newname[baselen + 3] = 'g';
     newname[baselen + 4] = '\0';
-    PFopen(&f, newname, "w");
+    PFopen(&f, newname, "wb");
     write_signature(f, source);
     PFclose(f);
 }
-
-signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t nfiles, size_t* sig_len, int numthreads) {
+void write_multisig_file(const char* basename, signature_t** signatures, size_t nsigs) {
+    PF_t* f;
+    char* newname;
+    size_t baselen;
+    size_t n;
+    baselen = strlen(basename);
+    newname = (char*)malloc(baselen + 5);
+    memcpy(newname, basename, baselen);
+    newname[baselen] = '.';
+    newname[baselen + 1] = 's';
+    newname[baselen + 2] = 'd';
+    newname[baselen + 3] = 'b';
+    newname[baselen + 4] = '\0';
+    PFopen(&f, newname, "wb");
+    PFputint64(f, (int64_t)nsigs);
+    for (n = 0;n < nsigs;n++) {
+        write_signature(f, signatures[n]);
+    }
+    PFclose(f);
+}
+signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t* numfiles, size_t* sig_len, int numthreads) {
     basis_function bf;
-    size_t i, n;
+    size_t i, j, k, n;
     size_t* p_n;
     size_t* i_p;
     size_t notax;
     size_t* p_notax;
     size_t minseqlen;
     size_t countsperproc;
+    size_t extrafiles;
     int nocalc;
+    int nflag;
     size_t kmerlen;
     taxextractor_t* te;
     char* line;
@@ -612,8 +723,12 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
     size_t nalloctaxstrings;
     DM64_t* file2tax;
     signature_t** result;
+    signature_t** tmpresult;
+    signature_t** subres;
+    int64_t taxnameid_demux;
     int gensigs;
-    
+    size_t nfiles;
+    nfiles = *numfiles;
     nocalc = set_basis_function(args, &bf, sig_len, &kmerlen);
 
     result = (signature_t**)calloc(nfiles, sizeof(signature_t*));
@@ -652,7 +767,8 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
         }
 
         /* read the signatures */
-        gensigs = args_ispresent(args, "keepsigs");
+        gensigs = (args_ispresent(args, "keepsigs")?1:0);
+        if (gensigs && args_ispresent(args, "filelist"))gensigs = 2;
         args_report_progress(NULL, "Reading signatures...\n");
         minseqlen = (size_t)args_getint(args, "filtershort", 0, 2000);
         if (nfiles < (size_t) numthreads) numthreads = (int)nfiles;
@@ -673,6 +789,7 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
         {
             char* ltaxonstring;
             int nullflag;
+            int muxed;
             size_t ifl_added = 0;
             size_t taxnameid;
             int cthread = omp_get_thread_num();
@@ -680,8 +797,10 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
             ifl_added = ((*i_p)++);
             while(ifl_added<nfiles) {
                 result[ifl_added] = get_signatures(sourcefiles[ifl_added], bf, (int)kmerlen, minseqlen);
-                if (gensigs) write_sigfile(sourcefiles[ifl_added], result[ifl_added]);
-                if (taxtype) {
+                muxed = signature_is_multiplexed(result[ifl_added]);
+                if (!muxed && gensigs==1 && !endswith(".sig", sourcefiles[ifl_added]))
+                    write_sigfile(sourcefiles[ifl_added], result[ifl_added]);
+                if (!muxed && taxtype) {
                     nullflag = 0;
                     taxnameid = DM64_get(file2tax, result[ifl_added]->fname, (int)strlen(result[ifl_added]->fname), &nullflag);
                     ltaxonstring = taxstrings[taxnameid];
@@ -711,16 +830,70 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
         #ifndef NOOPENMP
         omp_set_num_threads(1);
         #endif
+        /* report loading result */
         args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) files loaded \n", n, nfiles, (int)((n * 100) / nfiles));
         if (n != nfiles) {
             if (nfiles - n != 1)
                 args_report_warning(NULL, "Some " _LLD_ " files could not be properly loaded\n", nfiles - n);
-            else if(badload)
-                args_report_warning(NULL, "<%> could not be properly loaded\n",badload);
+            else if (badload)
+                args_report_warning(NULL, "<%> could not be properly loaded\n", badload);
         }
+        /* demultiplex multiplexed signatures */
+        nfiles = n;
+        j = 0;
+        for (i = 0;i<n;i++) {
+            if (signature_is_multiplexed(result[i])) {
+                nfiles += signature_get_multiplex_amount(result[i]) - 1;
+                j++;
+            }
+        }
+        if (n != nfiles) {
+            args_report_progress(NULL, "Additionally, " _LLD_ " signature(s) are contained inside of " _LLD_ " SDB file(s)\n", nfiles - n + j, j);
+            tmpresult = (signature_t**)malloc(sizeof(signature_t*)*nfiles);
+            extrafiles = 0;
+            for (i = 0;i < n;i++) {
+                if (signature_is_multiplexed(result[i])) {
+                    j = signature_get_multiplex_amount(result[i]);
+                    subres = signature_demultiplex(result[i]);
+                    signature_free(result[i]);
+                    memcpy(tmpresult + extrafiles, subres, sizeof(signature_t*)*(j));
+                    free(subres);
+                    if (taxtype) {
+                        /* assign taxonomy */
+                        for (k = 0;k < j;k++) {
+                            nflag = 0;
+                            taxnameid_demux = DM64_get(file2tax, tmpresult[extrafiles + k]->fname, (int)strlen(tmpresult[extrafiles + k]->fname), &nflag);
+                            line = taxstrings[taxnameid_demux];
+                            if (!nflag)
+                                taxextractor_translate(te, taxtype, line, tmpresult[extrafiles + k]->lineage, 9);
+                            else {
+                                notax++;
+                                badtax = sourcefiles[i];
+                            }
+                        }
+                    }
+                    extrafiles += j;
+                }
+                else {
+                    tmpresult[extrafiles] = result[i];
+                    extrafiles++;
+                }
+            }
+            free(result);
+            result = tmpresult;
+            nfiles = extrafiles;
+        }
+        /* generate signature file */
+        if (gensigs) {
+            line = args_getstr(args, "filelist", 0, "all_sigs.list");
+            if (strcmp(args_getstr(args,"keepsigs",0,"continue"),"stop")==0)
+                line = args_getstr(args, "output", 0, "all_sigs.list");
+            write_multisig_file(line, result, nfiles);
+        }
+        /* report on taxonomy assignment */
         if (notax > 0) {
             if (notax != 1)
-                args_report_warning(NULL, "Taxonomy could not be assigned for " _LLD_ " files\n", nfiles - n);
+                args_report_warning(NULL, "Taxonomy could not be assigned for " _LLD_ " signatures\n", nfiles - n);
             else if(badtax)
                 args_report_warning(NULL, "Taxonomy could not be assigned for <%>\n",badtax);
         }
@@ -734,7 +907,7 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t 
         taxextractor_free(te);
         args_report_info(NULL, "Signature cleanup complete.\n");
     }
-    
+    *numfiles = nfiles;
     return result;
 }
 
@@ -834,8 +1007,8 @@ void GenDisCal_print_ordered_output(
             for (j = i + 1; j < nfiles;j++) {
                 if (ocmp_types[offset + j - 1] != -3) {
                     outputlines[k] = GenDisCal_ordered_output_gen_line(signatures, i, j, ocmp_types[offset + j - 1]);
-                    ocmp_types[k] = ocmp_types[j];
-                    ocmp_results[k] = ocmp_results[j];
+                    ocmp_types[k] = ocmp_types[offset + j - 1];
+                    ocmp_results[k] = ocmp_results[offset + j - 1];
                     k++;
                 }
             }
@@ -852,6 +1025,115 @@ void GenDisCal_print_ordered_output(
     free(ocmp_types);
 }
 
+datatable_t* GenDisCal_perform_comparisons_hist_thread(
+        args_t* args, signature_t** signatures, size_t nfiles, size_t sig_len,
+        int threadid, int numthreads, size_t* p_n, method_function mf, double metharg) {
+    double dist = 0.0;
+    double oldval;
+    int simlevel;
+    int nullflag;
+    size_t ifl_added = 0;
+    size_t ifl_c;
+    int cthread = threadid;
+    size_t firstf = cthread;
+    size_t lastf = nfiles;
+    size_t tmp1;
+    size_t ordered_offset = 0;
+    datatable_t* otable;
+    size_t nextprint;
+    size_t n;
+    size_t nfsquare;
+
+    double minval;
+    double maxval;
+    double binwidth;
+    int onlylevel;
+    int issearch;
+
+    binwidth = args_getdouble(args, "histogram", 0, 0.001);
+    minval = args_getdouble(args, "above", 0, -INFINITY);
+    maxval = args_getdouble(args, "below", 0, INFINITY);
+    if (args_ispresent(args, "only"))
+        onlylevel = strtotaxsim(args_getstr(args, "only", 0, "Same_Species"));
+    else
+        onlylevel = -2;
+    if (args_ispresent(args, "search")) {
+        nfiles--;
+        issearch = 1;
+    }
+    else {
+        issearch = 0;
+    }
+    otable = datatable_alloc(1, 1, 0.0);
+
+    if (firstf > nfiles) firstf = nfiles;
+    nfsquare = nfiles*(nfiles - 1) / 2;
+    nextprint = 0;
+    for (ifl_added = firstf;ifl_added < lastf;ifl_added += numthreads) {
+        if (issearch) {
+            simlevel = signature_taxsimlevel(signatures[ifl_added], signatures[nfiles]);
+            if (onlylevel < -1 || simlevel == onlylevel) {
+                if (signatures[ifl_added] && signatures[nfiles])
+                    dist = mf((double*)(signatures[ifl_added]->data), (double*)(signatures[nfiles]->data), sig_len, metharg);
+                else
+                    dist = 1.0;
+                if (dist >= minval && dist <= maxval) {
+                    if (dist >= 0.0) {
+                        tmp1 = (size_t)round(dist / binwidth);
+                        nullflag = 0;
+                        oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
+                        if (nullflag)
+                            oldval = 0.0;
+                        datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                    }
+                    #pragma omp atomic
+                    (*p_n)++;
+                    if ((*p_n)>nextprint) {
+                        n = (*p_n);
+                        if(nfiles>100)
+                            nextprint += nfiles/100;
+                        else
+                            nextprint=n;
+                        args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) files compared\r", n, nfsquare, (int)(((double)n * 100) / (double)nfiles));
+                    }
+
+                }
+            }
+        }
+        else {
+            for (ifl_c = ifl_added + 1; ifl_c < nfiles;ifl_c++) {
+                simlevel = signature_taxsimlevel(signatures[ifl_added], signatures[ifl_c]);
+                if (onlylevel < -1 || simlevel == onlylevel) {
+                    if (signatures[ifl_added] && signatures[ifl_c])
+                        dist = mf((double*)(signatures[ifl_added]->data), (double*)(signatures[ifl_c]->data), sig_len, metharg);
+                    else
+                        dist = 1.0;
+                    if (dist >= 0.0) {
+                        tmp1 = (size_t)floor(dist / binwidth);
+                        nullflag = 0;
+                        oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
+                        if (nullflag)
+                            oldval = 0.0;
+                        datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                    }
+                    #pragma omp atomic
+                    (*p_n)++;
+                    if ((*p_n)>nextprint) {
+                        n = (*p_n);
+                        if(nfsquare>100)
+                            nextprint += nfsquare/100;
+                        else
+                            nextprint=n;
+                        args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) comparisons performed\r", n, nfsquare, (int)(((double)n * 100) / (double)nfsquare));
+                    }
+
+                }
+            }
+        }
+    }
+    return otable;
+}
+
 int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t nfiles, size_t sig_len, int numthreads) {
     method_function mf;
     double metharg;
@@ -866,6 +1148,7 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
     double* ocmp_results;
     int* ocmp_types;
     datatable_t* otable;
+    datatable_t** otable_sub;
     PF_t* outputf;
     size_t i,n;
     size_t* p_n;
@@ -927,7 +1210,7 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
         ocmp_types = (int*)malloc(sizeof(int)*orderedamount);
     }
 
-    PFopen(&outputf, args_getstr(args, "output", 0, "stdout"),"w");
+    PFopen(&outputf, args_getstr(args, "output", 0, "stdout"),"wb");
     if (!outputf) {
         args_report_error(NULL, "The output file <%s> could not be opened for writing! Aborting.\n", args_getstr(args, "output", 0, "stdout"));
         return 1;
@@ -971,6 +1254,12 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
         if (outputmode == OUTPUTMODE_NORMAL) {
             PFprintf(outputf, "File1,File2,Expected_Relation,Distance\n");
         }
+        if (outputmode == OUTPUTMODE_HIST) {
+            otable_sub = calloc(numthreads, sizeof(datatable_t*));
+        }
+        else {
+            otable_sub = NULL;
+        }
         #ifndef NOOPENMP
         #pragma omp parallel
         #endif
@@ -988,8 +1277,15 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
             size_t lastf = nfiles;
             size_t tmp1;
             size_t ordered_offset=0;
+            if (outputmode == OUTPUTMODE_HIST) {
+                otable_sub[cthread] = GenDisCal_perform_comparisons_hist_thread(args, signatures, nfiles, sig_len, cthread, numthreads, p_n, mf, metharg);
+            }
+            else{
             if (firstf > nfiles) firstf = nfiles;
             for (ifl_added = firstf;ifl_added < lastf;ifl_added += numthreads) {
+                if (cthread == 0) {
+                    args_report_info(NULL, "\t\t\t(" _LLD_ ")", ifl_added);
+                }
                 if (outputmode == OUTPUTMODE_MATRIX) {
                     datatable_set(otable, ifl_added, ifl_added, 0.0);
                 }
@@ -1009,7 +1305,7 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
                                 else fn1 = "<File could not opened>";
                                 if (signatures[nfiles] && signatures[nfiles]->fname) fn2 = signatures[nfiles]->fname;
                                 else fn2 = "<File could not opened>";
-                                #pragma omp critical
+#pragma omp critical
                                 PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
                             }
                             if (outputmode == OUTPUTMODE_ORDERED) {
@@ -1019,7 +1315,7 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
                             else if (outputmode == OUTPUTMODE_HIST) {
                                 if (dist >= 0.0) {
                                     tmp1 = (size_t)round(dist / binwidth);
-                                    #pragma omp critical
+#pragma omp critical
                                     {
                                         nullflag = 0;
                                         oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
@@ -1033,20 +1329,20 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
                                 datatable_set(otable, ifl_added, nfiles, dist);
                                 datatable_set(otable, nfiles, ifl_added, dist);
                             }
-                            #pragma omp atomic
+#pragma omp atomic
                             (*p_n)++;
                             if (nfiles < 100 || (*p_n) % (nfiles / 100) == 0) {
-                            #pragma omp critical
+#pragma omp critical
                                 args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) files compared\r", (*p_n), nfiles, (int)(((double)n * 100) / (double)nfiles));
                             }
                         }
                     }
                 }
                 else {
-                    ordered_offset = 1 + ifl_added*nfiles - (ifl_added + 1)*(ifl_added+2)/2;
+                    ordered_offset = 1 + ifl_added*nfiles - (ifl_added + 1)*(ifl_added + 2) / 2;
                     /* note: ordered_offset cannot be negative, but the above expression would return -1 for ifl_added == 0
                      *       this is why "1+" is added at the beginning of the expression and subtracted later.
-                     *       While not doing either step should still work in theory, since all the variables involved have
+                     *       While not doing either step should still work in theory as all the variables involved have
                      *       the same size, this approach was preferred to avoid potential problems if this were to change,
                      *       since (uint32_t)(-1) != (uint64_t)(-1), for example.
                      */
@@ -1065,18 +1361,18 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
                                     else fn1 = "<File could not opened>";
                                     if (signatures[ifl_c] && signatures[ifl_c]->fname) fn2 = signatures[ifl_c]->fname;
                                     else fn2 = "<File could not opened>";
-                                    #pragma omp critical
+#pragma omp critical
                                     PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
                                 }
                                 if (outputmode == OUTPUTMODE_ORDERED) {
                                     /* see above note for an explanation as to -1 is present here */
-                                    ocmp_results[ifl_c+ordered_offset-1] = dist;
-                                    ocmp_types[ifl_c+ordered_offset-1] = simlevel;
+                                    ocmp_results[ifl_c + ordered_offset - 1] = dist;
+                                    ocmp_types[ifl_c + ordered_offset - 1] = simlevel;
                                 }
                                 else if (outputmode == OUTPUTMODE_HIST) {
                                     if (dist >= 0.0) {
                                         tmp1 = (size_t)floor(dist / binwidth);
-                                        #pragma omp critical
+#pragma omp critical
                                         {
                                             nullflag = 0;
                                             oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
@@ -1087,16 +1383,16 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
                                     }
                                 }
                                 else if (outputmode == OUTPUTMODE_MATRIX) {
-                                    #pragma omp critical
+#pragma omp critical
                                     {
                                         datatable_set(otable, ifl_added, ifl_c, dist);
                                         datatable_set(otable, ifl_c, ifl_added, dist);
                                     }
                                 }
-                                #pragma omp atomic
+#pragma omp atomic
                                 (*p_n)++;
                                 if (nfsquare < 100 || (*p_n) % (nfsquare / 100) == 0) {
-                                    #pragma omp critical
+#pragma omp critical
                                     args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) comparisons performed\r", (*p_n), nfsquare, (int)(((double)n * 100) / (double)nfsquare));
                                 }
                             }
@@ -1104,6 +1400,15 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
                     }
                 }
             }
+            }
+        }
+        if (outputmode == OUTPUTMODE_HIST) {
+            datatable_addtables(otable, otable_sub, numthreads);
+            for (i = 0;i < (size_t)numthreads;i++) {
+                if (otable_sub[i])datatable_free(otable_sub[i]);
+                otable_sub[i] = NULL;
+            }
+            free(otable_sub);
         }
         args_report_progress(NULL, "A Total of " _LLD_ " comparisons were performed                        \n", n);
     }
@@ -1136,24 +1441,32 @@ int GenDisCal(args_t* args) {
     char** filelist;
     signature_t** siglist;
     size_t i;
-    size_t numfiles;
+    size_t numfiles, nfilesmod;
     size_t siglen;
     int numthreads;
     filelist = GenDisCal_get_file_list(args, &numfiles);
-    if (numfiles < 2) {
+    if (numfiles < 1) {
         args_report_error(NULL, "Number of files (" _LLD_ ") to be loaded is below 2! Aborting.\n", numfiles);
     }
     else {
         numthreads = args_getint(args, "nprocs", 0, autothreads());
         args_report_info(NULL, "Using up to %d threads\n", numthreads);
-        siglist = GenDisCal_get_signatures(args, filelist, numfiles, &siglen, numthreads);
-        GenDisCal_perform_comparisons(args, siglist, numfiles, siglen, numthreads);
-
-        for (i = 0;i < numfiles;i++) {
-            if (siglist[i])signature_free(siglist[i]);
-            siglist[i] = NULL;
+        nfilesmod = numfiles;
+        siglist = GenDisCal_get_signatures(args, filelist, &nfilesmod, &siglen, numthreads);
+        if (nfilesmod < 1) {
+            args_report_error(NULL, "Number of files (" _LLD_ ") to be loaded is below 2! Aborting.\n", numfiles);
         }
-        free(siglist);
+        else {
+            if(!args_ispresent(args,"keepsigs") || strcmp(args_getstr(args,"keepsigs",0,"continue"),"stop")!=0)
+                GenDisCal_perform_comparisons(args, siglist, nfilesmod, siglen, numthreads);
+
+            for (i = 0;i < numfiles;i++) {
+                if (siglist[i])signature_free(siglist[i]);
+                siglist[i] = NULL;
+            }
+        }
+        if (siglist)
+            free(siglist);
     }
     for (i = 0;i < numfiles;i++) {
         free(filelist[i]);

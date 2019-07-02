@@ -365,7 +365,7 @@ void subseq_nocpy(nucseq* target, nucseq* src, size_t start, size_t len)
     }
 }
 
-size_t twobitseq(nucleotide* nucseqseq, size_t len, uint8_t** target) {
+size_t twobitseq(nucleotide* nucseqseq, size_t len, char** target) {
     size_t i;
     uint8_t* result;
     char* curbyte;
@@ -373,7 +373,7 @@ size_t twobitseq(nucleotide* nucseqseq, size_t len, uint8_t** target) {
     size_t numel;
     
     numel = (len + 3) / 4;
-    result = *target;
+    result = (uint8_t*)(*target);
     result = realloc(result,numel*sizeof(uint8_t));
     /*note that if len is not a multiple of 4, the last byte will have A's appended to it*/
     curbyte = result;
@@ -390,7 +390,7 @@ size_t twobitseq(nucleotide* nucseqseq, size_t len, uint8_t** target) {
             offset -= 2;
         }
     }
-    *target = result;
+    *target = (char*)result;
     return numel;
 }
 size_t twobitrcseq(nucleotide* nucseqseq, size_t len, uint8_t** target) {
@@ -1105,7 +1105,7 @@ void nucseq_oligocount_to_ht(nucseq* sequence, ht64_t* target, int k) {
     size_t i;
     size_t maxi;
     size_t stk;
-    uint8_t* tbs;
+    char* tbs;
     int nf;
     size_t ignorecount;
     size_t keylen;
@@ -1152,8 +1152,8 @@ void nucseq_oligocount_to_hashht(nucseq* sequence, ht64_t* target, int k, hashde
     size_t maxi;
     size_t stk;
     uint64_t hkey;
-    uint8_t* tbs;
-    uint8_t* tbsrc;
+    char* tbs;
+    char* tbsrc;
     int nf;
     size_t ignorecount;
     size_t keylen;
@@ -1209,8 +1209,8 @@ void nucseq_oligocount_to_minhashLht(nucseq* sequence, ht64_t* target, int k, ha
     size_t maxi;
     size_t stk;
     uint64_t hkey;
-    uint8_t* tbs;
-    uint8_t* tbsrc;
+    char* tbs;
+    char* tbsrc;
     int nf;
     size_t ignorecount;
     size_t keylen;
@@ -1234,7 +1234,7 @@ void nucseq_oligocount_to_minhashLht(nucseq* sequence, ht64_t* target, int k, ha
             twobitrcseq(sequence->seq + i, stk, &tbsrc);
             if (memcmp(tbs, tbsrc, keylen) < 0) {
                 hkey = hash_index(tbs, keylen, hash);
-                if (hkey%mod == 0)
+                if(hkey%mod==0)
                     ht64_set(target, tbs, keylen, hkey, &nf);
             }
             else {
@@ -1403,7 +1403,8 @@ ht64_t* minimizerhash_table(nucseq** allsequences, size_t nseqs, int k, size_t w
     }
     return result;
 }
-int64_t* minhash_Msig(nucseq** allsequences, size_t nseqs, int k, size_t siglen, size_t genomesize_est) {
+
+int64_t* minhash_Msig_old(nucseq** allsequences, size_t nseqs, int k, size_t siglen, size_t genomesize_est) {
     ht64_t* ht_seq;
     hashdesc_t* hash;
     int64_t* valuetable;
@@ -1412,12 +1413,48 @@ int64_t* minhash_Msig(nucseq** allsequences, size_t nseqs, int k, size_t siglen,
     size_t i, j;
     size_t mod;
     hash = hashdesc_alloc();
+    hashdesc_init_fingerprint64(hash);
+    ht_seq = kmerhash_table(allsequences, nseqs, k, hash);
+    nkmers = ht64_astables(ht_seq, NULL, NULL, &valuetable);
+    vec_sorti64(valuetable, nkmers);
+    mod = (genomesize_est / siglen) / 3 * 2;
+    valuetable2 = (int64_t*)malloc(sizeof(int64_t)*(siglen + 1));
+    j = 0;
+    i = 0;
+    valuetable2[0] = nkmers;
+    while (i < nkmers && j < siglen) {
+        if (valuetable[i] % mod == 0) {
+            valuetable2[j + 1] = valuetable[i];
+            j++;
+        }
+        i++;
+    }
+    free(valuetable);
+    if (siglen > j) {
+        for (i = j;i < siglen;i++)
+            valuetable2[i] = 0x7FFFFFFFFFFFFFFF;
+        /* by using this number, we guarantee that these values will have the lowest priority*/
+    }
+    /*cleanup*/
+    ht64_free(ht_seq);
+    hashdesc_free(hash);
+    return valuetable2;
+}
+int64_t* minhash_Msig(nucseq** allsequences, size_t nseqs, int k, size_t siglen, size_t genomesize_est) {
+    ht64_t* ht_seq;
+    hashdesc_t* hash;
+    int64_t* valuetable;
+    int64_t* valuetable2;
+    size_t nkmers;
+    size_t i,j;
+    size_t mod;
+    hash = hashdesc_alloc();
     mod = (genomesize_est / siglen) / 3 * 2;
     hashdesc_init_fingerprint64(hash);
     ht_seq = kmerhash_minhashLtable(allsequences, nseqs, k, hash, mod);
     nkmers = ht64_astables(ht_seq, NULL, NULL, &valuetable);
     vec_sorti64(valuetable, nkmers);
-    valuetable2 = (int64_t*)malloc(sizeof(int64_t)*(siglen + 1));
+    valuetable2 =(int64_t*) malloc(sizeof(int64_t)*(siglen + 1));
     j = 0;
     i = 0;
     valuetable2[0] = nkmers;
@@ -1982,7 +2019,6 @@ void make_delta1(size_t *delta1, nucseq* pat) {
             delta1[pat->seq[i]] = pat->len - 1 - i;
     }
 }
-
 int is_prefix(nucseq* pat, size_t pos) {
     size_t i;
     size_t suffixlen;
@@ -1997,13 +2033,11 @@ int is_prefix(nucseq* pat, size_t pos) {
     }
     return 1;
 }
-
 size_t suffix_length(nucseq* pat, size_t pos) {
     size_t i;
     for (i = 0; (pat->seq[pos - i] == pat->seq[pat->len - 1 - i]) && (i < pos); i++);
     return i;
 }
-
 void make_delta2(size_t* delta2, nucseq* pat) {
     long long p;
     long long patlen;

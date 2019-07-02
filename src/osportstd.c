@@ -108,6 +108,9 @@ size_t PFread(void* buffer, size_t element_size, size_t element_count, PF_t* f) 
     size_t copysize;
     size_t resultsize;
     size_t curstart;
+#ifdef _WIN32
+    int tmp;
+#endif
     char* cbuf;
     if (!f || !(f->filepointer)) {
         return 0;
@@ -127,14 +130,19 @@ size_t PFread(void* buffer, size_t element_size, size_t element_count, PF_t* f) 
     }
     while (f->bufpos >= (long long)f->maxbpos && f->maxbpos == (long long)PFBUFFER - 1) {
 #ifdef _WIN32
-        f->maxbpos = fread_s(f->buffer, PFBUFFER, 1, PFBUFFER - 1, f->filepointer);
+        f->maxbpos = _fread_nolock(f->buffer, 1, PFBUFFER - 1, f->filepointer);
+        tmp = ferror(f->filepointer);
 #else
         f->maxbpos = fread(f->buffer, 1, PFBUFFER - 1, f->filepointer);
 #endif
         f->bufpos = 0;
         f->buffer[f->maxbpos] = 0;
-        if (resultsize-curstart > f->maxbpos)
-            copysize = f->maxbpos+1;
+        /* we assume that the previous string ends with a \0 and therefore move the caret back */
+        if (curstart > 0) curstart--;
+        if (resultsize - curstart > f->maxbpos)
+            copysize = f->maxbpos + 1;
+        else
+            copysize = resultsize - curstart;
         memcpy(cbuf + curstart, f->buffer + f->bufpos, copysize);
         if (copysize == f->maxbpos + 1)
             copysize--;

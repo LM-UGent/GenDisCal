@@ -18,6 +18,7 @@ size_t multikarl(nucseq* sequence, int n, double** result);
 size_t multifreq(nucseq* sequence, int n, double** result);
 #define SIGLEN_MINHASH  2000
 size_t minhashsig(nucseq* sequence, int n, double** result);
+size_t combinedsig(nucseq* sequence, int n, double** result);
 
 typedef double(*method_function)(double*, double*, size_t, double);
 
@@ -35,6 +36,7 @@ double sqrtcorr(double* sig1, double* sig2, size_t veclen, double unused);
 double SVcorr(double* sig1, double* sig2, size_t veclen, double threshold);
 double multiminSVC(double* sig1, double* sig2, size_t veclen, double threshold);
 double approxANI(double* sig1, double* sig2, size_t veclen, double threshold);
+double combinedSpecies(double* sig1, double* sig2, size_t veclen, double threshold);
 
 #endif
 
