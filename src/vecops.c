@@ -403,8 +403,8 @@ void _vec_quicksort_byi64(void* target, size_t elt_size, int64_t* values, size_t
         }
         /* doing this prevents an infinite loop */
     }
-    _vec_quicksort_byi64(target, elt_size, values, pivot);
-    _vec_quicksort_byi64(target, elt_size, values + pivot, len - pivot);
+    _vec_quicksort_byi64(target_c, elt_size, values, pivot);
+    _vec_quicksort_byi64(target_c + pivot*elt_size, elt_size, values + pivot, len - pivot);
 }
 void vec_sort_byi64(void* target, size_t elt_size, int64_t* values, size_t numel) {
     _vec_quicksort_byi64(target, elt_size, values, numel);

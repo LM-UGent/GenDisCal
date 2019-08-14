@@ -393,7 +393,7 @@ size_t twobitseq(nucleotide* nucseqseq, size_t len, char** target) {
     *target = (char*)result;
     return numel;
 }
-size_t twobitrcseq(nucleotide* nucseqseq, size_t len, uint8_t** target) {
+size_t twobitrcseq(nucleotide* nucseqseq, size_t len, char** target) {
     size_t i;
     uint8_t* result;
     char* curbyte;
@@ -1364,7 +1364,7 @@ void nucseq_minicount_to_hashht(nucseq* sequence, ht64_t* target, int k, size_t 
     size_t i, nmins, minimizer, keylen;
     uint64_t hkey;
     size_t* minimizers;
-    uint8_t* tbs, *tbsrc;
+    char* tbs, *tbsrc;
     int nf;
     size_t stk;
     stk = k;

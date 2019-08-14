@@ -1,5 +1,6 @@
 #include "GenDisCal_distances.h"
 #include "vecops.h"
+#include "suffixtree.h"
 #include <string.h>
 
 /* helper functions */
@@ -44,19 +45,24 @@ double cut_gaussianbell(double mu, double sigma, double x, double outlier_range)
     else return gaussvalue - outliervalue;
 }
 // bases
+size_t gensz(nucseq* sequence, int n, double** result) {
+    *result = malloc(sizeof(double));
+    (*result)[0] = (double) (sequence->len);
+    return sizeof(double) * 1;
+}
 size_t freqn(nucseq* sequence, int n, double** result) { // n-mer frequency signature
     int32_t* counts;
     counts = oligocount(sequence, n);
     *result = freqsig(counts, n);
     free(counts);
-    return (size_t)1 << 2 * n;
+    return ((size_t)1 << (2 * n)) * sizeof(double);
 }
 size_t freqs(nucseq* sequence, int n, double** result) { // n-mer frequency signature
     int32_t* counts;
     counts = oligocount_2strand(sequence, n);
     *result = freqsig(counts, n);
     free(counts);
-    return (size_t)1 << 2 * n;
+    return ((size_t)1 << (2 * n)) * sizeof(double);
 }
 size_t markz1(nucseq* sequence, int n, double** result) {
     int32_t* counts;
@@ -76,7 +82,7 @@ size_t markz1(nucseq* sequence, int n, double** result) {
         }
     }
     free(counts);
-    return (size_t)1 << (2 * n);
+    return ((size_t)1 << (2 * n)) * sizeof(double);
 }
 size_t markz2(nucseq* sequence, int n, double** result) {
     int32_t* counts;
@@ -97,7 +103,7 @@ size_t markz2(nucseq* sequence, int n, double** result) {
         }
     }
     free(counts);
-    return (size_t)1 << (2 * n);
+    return ((size_t)1 << (2 * n)) * sizeof(double);
 }
 size_t TETRA(nucseq* sequence, int unused, double** result) {
     int32_t* counts1;
@@ -114,14 +120,14 @@ size_t TETRA(nucseq* sequence, int unused, double** result) {
     free(counts1);
     free(counts2);
     clear_nucseq(&revcomp);
-    return 256;
+    return 256 * sizeof(double);
 }
 size_t karln(nucseq* sequence, int n, double** result) { // n-mer karlin signature
     int32_t* counts;
     counts = oligocount(sequence, n);
     *result = karlinsig(counts, n);
     free(counts);
-    return (size_t)1 << 2 * n;
+    return ((size_t)1 << (2 * n)) * sizeof(double);
 }
 size_t karsn(nucseq* sequence, int n, double** result) { // n-mer karlin* signature
     int32_t* counts;
@@ -131,7 +137,7 @@ size_t karsn(nucseq* sequence, int n, double** result) { // n-mer karlin* signat
     *result = karlinsig(counts, n);
     free(counts);
     numel = (size_t)1 << (n * 2);
-    return numel;
+    return numel * sizeof(double);
 }
 size_t markn1(nucseq* sequence, int n, double** result) {
     int32_t* counts;
@@ -141,7 +147,7 @@ size_t markn1(nucseq* sequence, int n, double** result) {
     *result = fullmarkovsig(counts, n);
     free(counts);
     numel = (size_t)1 << (n * 2);
-    return numel;
+    return numel * sizeof(double);
 }
 size_t markn2(nucseq* sequence, int n, double** result){
     int32_t* counts;
@@ -151,44 +157,149 @@ size_t markn2(nucseq* sequence, int n, double** result){
     *result = fullmarkovsig(counts, n);
     free(counts);
     numel = (size_t)1 << (n * 2);
-    return numel;
+    return numel * sizeof(double);
 }
 size_t multikarl(nucseq* sequence, int n, double** result) {
     *result = multikarlsig(&sequence, 1, n, 20000, 10000);
-    return (1LL << (2 * n))*(1LL << (2 * n));
+    return (1LL << (2 * n))*(1LL << (2 * n)) * sizeof(double);
 }
 size_t multifreq(nucseq* sequence, int n, double** result) {
     *result = multifreqsig(&sequence, 1, n, 3000, "ATG");
-    return (1LL << (2 * n))*(1LL << (2 * n));
+    return (1LL << (2 * n))*(1LL << (2 * n)) * sizeof(double);
 }
 size_t minhashsig(nucseq* sequence, int n, double** result) {
     *result = (double*) minhash_Msig(&sequence, 1, n, SIGLEN_MINHASH, 200000);
-    return SIGLEN_MINHASH;
+    return SIGLEN_MINHASH*sizeof(int64_t);
 }
 
-size_t combinedsig(nucseq * sequence, int n, double ** result)
+size_t combinedsig(nucseq* sequence, int n, double ** result)
 {
     double *K4;
     double *K6;
     double *minhash;
-    size_t numel4, numel6, numelm;
-    double* tmpres;
-    numel4 = karsn(sequence, 4, &K4);
-    numel6 = karsn(sequence, 6, &K6);
-    numelm = minhashsig(sequence, 31, &minhash);
-    tmpres = malloc(sizeof(double)*(numel4 + numel6) + sizeof(int64_t)*numelm);
-    *result = tmpres;
-    memcpy(tmpres, K4, sizeof(double)*(numel4));
-    memcpy(tmpres + numel4, K6, sizeof(double)*(numel6));
-    memcpy(tmpres + numel4 + numel6, minhash, sizeof(int64_t)*(numelm));
-    *result = tmpres;
+    double *lensig;
+    size_t sigsize4, sigsize6, sigsizem, sigsizel;
+    char* tmpres;
+    sigsize4 = karsn(sequence, 4, &K4);
+    sigsize6 = karsn(sequence, 6, &K6);
+    sigsizem = minhashsig(sequence, 31, &minhash);
+    sigsizel = gensz(sequence, 0, &lensig);
+    tmpres = malloc(sigsize4 + sigsize6 + sigsizem);
+    memcpy(tmpres, K4, sigsize4);
+    memcpy(tmpres + sigsize4, K6, sigsize6);
+    memcpy(tmpres + sigsize4 + sigsize6, minhash, sigsizem);
+    memcpy(tmpres + sigsize4 + sigsize6 + sigsizem, minhash, sigsizem);
+    *result = (double*) tmpres;
     free(K4);
     free(K6);
     free(minhash);
-    return (sizeof(double)*(256 + 4096) + sizeof(int64_t)*SIGLEN_MINHASH);
+    free(lensig);
+    return sigsize4 + sigsize6 + sigsizem + sigsizel;
+}
+
+size_t SSUseq(nucseq* sequence, int unused, double ** result)
+{
+    static char* consensus = 
+        "TAATTGGAGAGTTTGATCCTGGCTCAGGATGAACGCTGGCGGCATGCCTAACACATGCAAGTCGAACGTATTGAAAGG"
+        "TGCTTGCACCTGGACGAGTGGCGGACGGGTGAGTAACACGTGGGAACCTGCCCTTAAGTGGGGGATAACATTTGGAAA"
+        "CAGATGCTAATACCGCATAAAACCGCATGGTTAAAGGCTGAAAGTGGCGTGAGCTATCGCTTTTGGATGGGCCCGCGT"
+        "CGGATTAGCTAGTTGGTGAGGTAACGGCTCACCAAGGCGACGATCCGTAGCCGGTCTGAGAGGATGATCGGCCACACT"
+        "GGGACTGAGACACGGCCCAGACTCCTACGGGAGGCAGCAGTGGGGAATATTGCACAATGGGCGCAAGCCTGATGCAGC"
+        "AATGCCGCGTGAGTGAAGAAGGCCTTCGGGTTGTAAAGCTCTTTTGTTGGGGAAGAAAGGTCGGCAGGTAACTGTTGT"
+        "CGGCGTGACGGTACCCAACGAAAAAGCACCGGCTAACTACGTGCCAGCAGCCGCGGTAATACGTAGGGTGCAAGCGTT"
+        "ATCCGGAATTATTGGGCGTAAAGCGAGCGCAGGCGGTTTTTTAAGTCTGATGTGAAAGCCCTCGGCTTAACCGGGGAA"
+        "GTGCATTGGAAACTGGGAAACTTGAGTGCAGAAGAGGAGAGTGGAATTCCATGTGTAGCGGTGAAATGCGTAGATATA"
+        "TGGAGGAACACCAGTGGCGAAGGCGGCTCTCTGGTCTGTAACTGACGCTGAGGCTCGAAAGCGTGGGGAGCAAACAGG"
+        "ATTAGATACCCTGGTAGTCCACGCCGTAAACGATGAATGCTAGGTGTTGGGGGGTTTCCGCCCTTCAGTGCCGCAGCT"
+        "AACGCATTAAGCATTCCGCCTGGGGAGTACGGCCGCAAGGTTGAAACTCAAAGGAATTGACGGGGGCCCGCACAAGCG"
+        "GTGGAGCATGTGGTTTAATTCGAAGCAACGCGAAGAACCTTACCAGGTCTTGACATCTTTTGAACACCTTAGAGATAA"
+        "GGTTTTCCCTTCGGGGACAAAATGACAGGTGCTGCATGGTTGTCGTCAGCTCGTGTCGTGAGATGTTGGGTTAAGTCC"
+        "CGCAACGAGCGCAACCCTTATCATTAGTTGCCAGCATTAAGTTGGGCACTCTAGTGAGACTGCCGGTGACAAACCGGA"
+        "GGAAGGTGGGGATGACGTCAAATCATCATGGCCCTTATGACCTGGGCTACACACGTGCTACAATGGATGGTACAAAGA"
+        "GTTGCGAGACCGCGAGGTCAAGCTAATCTCTTAAAGCCATTCTCAGTTCGGATTGTAGTCTGCAACTCGACTACATGA"
+        "AGTCGGAATCGCTAGTAATCGCGGATCAGCATGCCGCGGTGAATACGTTCCCGGGCCTTGTACACACCGCCCGTCACA"
+        "CCATGGGAGTTTGTAACACCCGAAGTCGGTGGCCTAACCTTAGGGAGGGAGCCGACTAAGGTGGGACAGATGACTGGG"
+        "GTGAAGTCGTAACAAGGTAGCCGTAGGGGAACCTGCGGCTGGATCACCTCCTTTCT";
+    static size_t consensuslen = 0;
+    static suftree_t* consensustree = NULL;
+    char* marks;
+    char** detectedSSU;
+    char** detectedrcSSU;
+    double* alignment_score;
+    size_t* SSUlen;
+    size_t* rcSSUlen;
+    size_t i, nSSU, nrcSSU, maxlenid, resultlen;
+    nucseq tmpseq = EMPTYSEQ;
+    
+    resultlen = 0;
+    if (!consensuslen)
+        consensuslen = strlen(consensus);
+    if (!consensustree) {
+        nucseq_from_string(&tmpseq, consensus);
+        consensustree = suftree_from(tmpseq.seq, SUFTREE_DEFAULT, consensuslen);
+        clear_nucseq(&tmpseq);
+    }
+    if (!sequence) {
+        suftree_free(consensustree);
+        consensustree = NULL;
+    }
+    else {
+        marks = suftree_approximatesearch(sequence->seq, sequence->len, consensustree, 14, 1100, 400);
+        detectedSSU = marks_split(sequence->seq, marks, sequence->len, &SSUlen, &nSSU, KEEP_MARKED);
+        nucseqrevcomp(sequence, &tmpseq);
+        free(marks);
+        marks = suftree_approximatesearch(tmpseq.seq, tmpseq.len, consensustree, 14, 1100, 400);
+        detectedrcSSU = marks_split(tmpseq.seq, marks, tmpseq.len, &rcSSUlen, &nrcSSU, KEEP_MARKED);
+        free(marks);
+        if (nSSU == 0 && nrcSSU > 0) {
+            nSSU = nrcSSU;
+            detectedSSU = detectedrcSSU;
+            SSUlen = rcSSUlen;
+        }
+        else if (nSSU > 0 && nrcSSU > 0) {
+            detectedSSU = (char**)realloc(detectedSSU, sizeof(char*)*(nSSU + nrcSSU));
+            SSUlen = (size_t*)realloc(SSUlen, sizeof(size_t)*(nSSU + nrcSSU));
+            memcpy(detectedSSU + nSSU, detectedrcSSU, sizeof(char*)*nrcSSU);
+            memcpy(SSUlen + nSSU, rcSSUlen , sizeof(size_t)*nrcSSU);
+            free(detectedrcSSU);
+            free(rcSSUlen);
+            nSSU += nrcSSU;
+        }
+        if (nSSU > 0) {
+            alignment_score = (double*)malloc(sizeof(double)*nSSU);
+            alignment_score[0] = 0.0;
+            maxlenid = 0;
+            for (i = 0;i < nSSU;i++) {
+                alignment_score[i] = suftree_roughalign(detectedSSU[i], SSUlen[i], consensustree, 8, 1, 1);
+                if (alignment_score[i] < alignment_score[maxlenid])maxlenid = i;
+            }
+            *result = (double*)suftree_from(detectedSSU[maxlenid], SUFTREE_DEFAULT, SSUlen[maxlenid]);
+            resultlen = SSUlen[maxlenid];
+            for (i = 0;i < nSSU;i++) {
+                free(detectedSSU[i]);
+            }
+            free(alignment_score);
+            free(detectedSSU);
+            free(SSUlen);
+        }
+    }
+    return resultlen;
 }
 
 // methods
+double reldist(double* sig1, double* sig2, size_t veclen, double unused) {
+    double* tmp;
+    double result;
+    size_t i;
+    tmp = malloc(sizeof(double)*veclen);
+    for (i = 0;i < veclen;i++) {
+        tmp[i] = (sig1[i] - sig2[i])*2.0 / (sig1[i] + sig2[i]);
+    }
+    vec_abs(tmp,veclen);
+    result = vec_avg(tmp, veclen);
+    free(tmp);
+    return result;
+}
 double ED(double* sig1, double* sig2, size_t veclen, double unused) {
     double* tmp;
     double result;
@@ -572,4 +683,16 @@ double combinedSpecies(double* sig1, double* sig2, size_t veclen, double k)
     Weights were derived from the Matthew's corelation coeffcient
     */
     return 1 - (0.76*minhashconclusion + 0.74*PaSiT4conclusion)/(0.76+0.74);
+}
+
+double localalign(double * sig1, double * sig2, size_t veclen, double threshold)
+{
+    suftree_t* s1;
+    suftree_t* s2;
+    char* seq2;
+    size_t seq2len;
+    s1 = (suftree_t*)sig1;
+    s2 = (suftree_t*)sig2;
+    seq2 = suftree_getstrptr(s2, &seq2len);
+    return suftree_roughalign(seq2, seq2len, s1, 9, 1, 1);
 }

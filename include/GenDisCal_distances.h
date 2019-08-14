@@ -5,6 +5,7 @@
 
 typedef size_t(*basis_function)(nucseq*, int, double**);
 
+size_t gensz(nucseq* sequence, int n, double** result);
 size_t freqn(nucseq* sequence, int n, double** result);
 size_t freqs(nucseq* sequence, int n, double** result);
 size_t TETRA(nucseq* sequence, int unused, double** result);
@@ -19,9 +20,14 @@ size_t multifreq(nucseq* sequence, int n, double** result);
 #define SIGLEN_MINHASH  2000
 size_t minhashsig(nucseq* sequence, int n, double** result);
 size_t combinedsig(nucseq* sequence, int n, double** result);
+size_t SSUseq(nucseq* sequence, int unused, double** result);
+
+double* exportSSUsig(double* signature);
+nucseq* importSSUsig(double* data, size_t datalen);
 
 typedef double(*method_function)(double*, double*, size_t, double);
 
+double reldist(double* sig1, double* sig2, size_t veclen, double unused);
 double ED(double* sig1, double* sig2, size_t veclen, double unused);
 double AMD(double* sig1, double* sig2, size_t veclen, double unused);
 double SVC(double* sig1, double* sig2, size_t veclen, double threshold);
@@ -37,6 +43,7 @@ double SVcorr(double* sig1, double* sig2, size_t veclen, double threshold);
 double multiminSVC(double* sig1, double* sig2, size_t veclen, double threshold);
 double approxANI(double* sig1, double* sig2, size_t veclen, double threshold);
 double combinedSpecies(double* sig1, double* sig2, size_t veclen, double threshold);
+double localalign(double* sig1, double* sig2, size_t veclen, double threshold);
 
 #endif
 

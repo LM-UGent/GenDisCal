@@ -73,6 +73,7 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
     args_add_help(result, "basis", "SIGNATURE BASIS",
         "Signature bases are used to transform a genome into a vector of numbers. "
         "Available signatures are as follows:\n"
+        "   len        -- use genome length as a signature\n"
         "   GC         -- use GC content as a signature\n"
         "   freq <k>   -- use frequencies of <k>-mers as a signature\n"
         "   karl <k>   -- use karlin signatures of <k>-mers\n"
@@ -89,7 +90,8 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "   euclid/ED      -- use the euclidian distance\n"
         "   hamming        -- use the hamming distance\n"
         "   PaSiT/SVC <f>  -- use the PaSiT distance with a non-standard threshold\n"
-        "   pearson/corr   -- use Pearson correlation as dissimilarity measure\n",
+        "   pearson/corr   -- use Pearson correlation as dissimilarity measure\n"
+        "   reldist        -- use the mean of pairwise relative distances between signature values\n",
         "distance calculation method to be used");
     args_add_help(result, "preset", "OPTION PRESET",
         "For convenience some option presets are provided, which have shown good preformance during "
@@ -286,6 +288,7 @@ typedef struct signature_t {
     int64_t lineage[9];
     int freefname;
     size_t multicount;
+    int datatype;
 } signature_t;
 #define LINEAGE_PHYLUM      0
 #define LINEAGE_CLASS       1
@@ -356,8 +359,8 @@ int set_basis_function(args_t* args, basis_function* bf, size_t* sig_len, size_t
     int nocalc;
     char* basisstr;
     char* presetstr;
-    char* possible_bases[] = { "GC","freq","karl","exp","s_freq","s_karl","s_exp" };
-    basis_function bf_list[] = { freqs,freqs,karsn,markz2,freqn,karln,markz1 };
+    char* possible_bases[] = { "GC","freq","karl","exp","s_freq","s_karl","s_exp","len","SSU" };
+    basis_function bf_list[] = { freqs,freqs,karsn,markz2,freqn,karln,markz1,gensz,SSUseq };
     nocalc = 0;
     presetstr = args_getstr(args, "preset", 0, NULL);
     if (presetstr) {
@@ -450,7 +453,9 @@ int set_basis_function(args_t* args, basis_function* bf, size_t* sig_len, size_t
             *bf = bf_list[i];
         }
         if (strcmp(basisstr, "GC") == 0)
-            kmerlen = args_getint(args, "basis", 0, 0);
+            kmerlen = 0;
+        else if (strcmp(basisstr, "len") == 0)
+            kmerlen = 0;
         else
             kmerlen = args_getint(args, "basis", 0, 4);
         if (kmerlen < 0) kmerlen = 0;
@@ -514,10 +519,18 @@ int set_method_function(args_t* args, method_function* mf, double* metharg) {
             *mf = corr;
             *metharg = 0.0;
         }
+        else if (strcmp(methstr, "reldist") == 0) {
+            *mf = reldist;
+            *metharg = 0.0;
+        }
         else if (beginswith("SVC", methstr)) {
             *metharg = atof(methstr + 3);
             *mf = SVC;
             args_report_warning(NULL, "'-m SVC<f>' is deprecated, use '-m SVC <f>' instead\n");
+        }
+        else if (beginswith("localalign", methstr)) {
+            *metharg = 1;
+            *mf = localalign;
         }
         else {
             tmp = 0.0;
@@ -535,20 +548,6 @@ int set_method_function(args_t* args, method_function* mf, double* metharg) {
     return 0;
 }
 
-double* readsig_fromfile(PF_t* source, size_t* sl) {
-    double* data;
-    int32_t type;
-    int32_t datatype; /* NOTE: datatype is ignored - values are assumed to be stored as double */
-    uint64_t n;
-    /* it is assumed that the file's endianness matches that of the OS */
-    PFread(&type, sizeof(int32_t), 1, source);
-    PFread(&datatype, sizeof(int32_t), 1, source);
-    PFread(&n, sizeof(uint64_t), 1, source);
-    data = malloc(sizeof(double)*n);
-    PFread(data, sizeof(double), n, source);
-    *sl = (size_t)n;
-    return data;
-}
 void read_sigmeta_from_file(PF_t* source, signature_t* sig) {
     int64_t fnamelen;
     /* it is assumed that the file's endianness matches that of the OS */
@@ -560,26 +559,50 @@ void read_sigmeta_from_file(PF_t* source, signature_t* sig) {
         PFread(sig->fname, sizeof(char), fnamelen, source);
     }
 }
+signature_t* readsig_fromfile(PF_t* source) {
+    signature_t* res;
+    double* data;
+    int32_t type;
+    int32_t datatype;
+    uint64_t n;
+    /* it is assumed that the file's endianness matches that of the OS */
+    PFread(&type, sizeof(int32_t), 1, source);
+    PFread(&datatype, sizeof(int32_t), 1, source);
+    PFread(&n, sizeof(uint64_t), 1, source);
+    if (datatype == 2) {
+        /* rem: datatype == 2 is bytes */
+        data = malloc(n);
+        PFread(data, 1, n, source);
+    }
+    else {
+        data = malloc(sizeof(double)*n);
+        PFread(data, sizeof(double), n, source);
+    }
+    res = signature_alloc();
+    res->data = data;
+    res->len = n;
+    res->datatype = datatype;
+    read_sigmeta_from_file(source, res);
+    return res;
+}
 signature_t* read_sig_file(char* filename) {
     signature_t* res;
     PF_t* f;
-    size_t n;
-    res = signature_alloc();
     PFopen(&f, filename, "rb");
     if (f) {
-        res->fname = os_rmdirname(filename);
-        res->data = (void*)readsig_fromfile(f, &n);
-        res->len = n;
-        read_sigmeta_from_file(f, res);
+        res = readsig_fromfile(f);
+        if (!res->fname)
+            res->fname = os_rmdirname(filename);
         PFclose(f);
     }
+    else
+        res = signature_alloc();
     return res;
 }
 signature_t* read_multisig_file_as_multiplexed(char* filename, int64_t maxcount) {
     signature_t* res;
     signature_t** resarray;
     PF_t* f;
-    size_t n;
     int64_t cursig;
     int64_t fcount;
     res = NULL;
@@ -589,10 +612,7 @@ signature_t* read_multisig_file_as_multiplexed(char* filename, int64_t maxcount)
         resarray = calloc((size_t)fcount, sizeof(signature_t*));
         if (fcount > maxcount)fcount = maxcount;
         for (cursig = 0; cursig < fcount;cursig++) {
-            res = signature_alloc();
-            res->data = (void*)readsig_fromfile(f, &n);
-            res->len = n;
-            read_sigmeta_from_file(f, res);
+            res = readsig_fromfile(f);
             resarray[cursig] = res;
         }
         res = signature_multiplex(resarray, fcount);
@@ -624,6 +644,7 @@ signature_t* get_signature_from_fasta(char* filename, basis_function basis, int 
         appendtoseq(&tmpseq, nsa[i]);
     }
     sg->len = basis(&(tmpseq), nlen, (double**)(&(sg->data)));
+    sg->datatype = 2; /* starting from version 0.2, all computed signatures are to be considered as binary data */
     clear_nucseq(&tmpseq);
     clear_nucseq(&spacerseq);
     for (i = 0;i<outcount;i++) {
@@ -632,30 +653,48 @@ signature_t* get_signature_from_fasta(char* filename, basis_function basis, int 
     }
     PFclose(f);
     free(nsa);
+    if (!sg->data) {
+        signature_free(sg);
+        sg = NULL;
+    }
     return sg;
 }
 signature_t* get_signatures(char* filename, basis_function basis, int nlen, size_t minseqlen) {
-    if (endswith(".sig", filename))
-        return read_sig_file(filename);
-    else if (endswith(".sdb", filename)) {
-        return read_multisig_file_as_multiplexed(filename, 100000000);
+    if (basis == SSUseq) {
+        if (endswith(".sig", filename) || endswith(".sdb", filename)) {
+            args_report_warning(NULL, "SSUs cannot be stored as signatures. Skipping file <%s>\n", filename);
+            return NULL;
+        }
+        else {
+            return get_signature_from_fasta(filename, basis, nlen, minseqlen);
+        }
     }
-    else
-        return get_signature_from_fasta(filename, basis, nlen, minseqlen);
+    else {
+        if (endswith(".sig", filename))
+            return read_sig_file(filename);
+        else if (endswith(".sdb", filename)) {
+            return read_multisig_file_as_multiplexed(filename, 100000000);
+        }
+        else
+            return get_signature_from_fasta(filename, basis, nlen, minseqlen);
 
+    }
 }
 
 void write_signature(PF_t* target, signature_t* source) {
     int32_t type;
-    int32_t datatype; /* NOTE: datatype is ignored - values are assumed to be stored as double */
+    int32_t datatype; /* DATATYPE: 1 - double, 2 - byte */
     uint64_t fnamelen;
-    datatype = 1;
+    datatype = source->datatype;
     type = 1;
     /* it is assumed that the file's endianness matches that of the OS */
     PFwrite(&type, sizeof(int32_t), 1, target);
     PFwrite(&datatype, sizeof(int32_t), 1, target);
     PFwrite(&(source->len), sizeof(uint64_t), 1, target);
-    PFwrite(source->data, sizeof(double), source->len, target);
+    if (datatype <= 1)
+        PFwrite(source->data, sizeof(double), source->len, target);
+    else if (datatype == 2)
+        PFwrite(source->data, 1, source->len, target);
     if (source->fname) {
         /* inserted a the end to maintain portability */
         fnamelen = strlen(source->fname);
@@ -770,7 +809,9 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t*
         gensigs = (args_ispresent(args, "keepsigs")?1:0);
         if (gensigs && args_ispresent(args, "filelist"))gensigs = 2;
         args_report_progress(NULL, "Reading signatures...\n");
-        minseqlen = (size_t)args_getint(args, "filtershort", 0, 2000);
+        if (bf != SSUseq) minseqlen = 2000;
+        else minseqlen = 1200;
+        minseqlen = (size_t)args_getint(args, "filtershort", 0, (int)minseqlen);
         if (nfiles < (size_t) numthreads) numthreads = (int)nfiles;
         omp_set_num_threads(numthreads);
         n = 0;
@@ -885,10 +926,15 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t*
         }
         /* generate signature file */
         if (gensigs) {
-            line = args_getstr(args, "filelist", 0, "all_sigs.list");
-            if (strcmp(args_getstr(args,"keepsigs",0,"continue"),"stop")==0)
-                line = args_getstr(args, "output", 0, "all_sigs.list");
-            write_multisig_file(line, result, nfiles);
+            if (bf == SSUseq) {
+                args_report_warning(NULL, "SSU's cannot be exported as signatures - no signature database file generated\n");
+            }
+            else {
+                line = args_getstr(args, "filelist", 0, "all_sigs.list");
+                if (strcmp(args_getstr(args, "keepsigs", 0, "continue"), "stop") == 0)
+                    line = args_getstr(args, "output", 0, "all_sigs.list");
+                write_multisig_file(line, result, nfiles);
+            }
         }
         /* report on taxonomy assignment */
         if (notax > 0) {
