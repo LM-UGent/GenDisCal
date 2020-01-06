@@ -1,6 +1,7 @@
 #ifndef DEF_HASH_TABLE
 #define DEF_HASH_TABLE
 
+#include "osportstd.h"
 #include "hash.h"
 
 typedef struct hash_table_32_t ht32_t;
@@ -22,5 +23,6 @@ int64_t ht64_get(ht64_t* target, char* key, size_t keylen, int* nullflag);
 void ht64_set(ht64_t* target, char* key, size_t keylen, int64_t value, int* nullflag);
 void ht64_inc(ht64_t* target, char* key, size_t keylen, int64_t by, int* nullflag);
 size_t ht64_astables(ht64_t * target, char*** p_listofnames, size_t** p_listoflens, int64_t** p_values);
-
+void ht64_save(ht64_t* table, PF_t* file);
+ht64_t* ht64_load(PF_t* file);
 #endif

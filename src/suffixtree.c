@@ -1,3 +1,27 @@
+/*
+MIT License
+
+Copyright (c) 2019 Gleb Goussarov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -276,6 +300,10 @@ void suftree_printbacklinks(suftree_t* tree) {
     }
 }
 char* suftree_getstrptr(suftree_t* tree, size_t* output_len) {
+    if (!tree) {
+        *output_len = 0;
+        return NULL;
+    }
     if (output_len) *output_len = tree->datalen;
     return tree->data;
 }
@@ -616,11 +644,11 @@ suftree_t* suftree_from(char* data, int option, size_t datalen) {
     return result;
 }
 void suftree_free(suftree_t* target) {
-    if (target->freedata) {
+    if (target->freedata && target->data) {
         free(target->data);
     }
     target->data = NULL;
-    bshtnode_cutbranch(target->root,0);
+    bshtnode_cutbranch(target->root, 0);
 }
 
 suftree_t* suftree_intersection(suftree_t* A, suftree_t* B) {
@@ -845,11 +873,12 @@ size_t suftree_search(suftree_t* target, char* data, size_t datalen) {
     return k - datalen;
 }
 char* suftree_markpresent(char* data, size_t datalen, suftree_t* tree, size_t minlen, size_t* correspondance) {
-    size_t i, j, k, matches, i0;
+    size_t i, j, k, matches, lastmatches, i0, lasti0;
     char* result;
     int mismatch;
     bshtnode_t* curnode;
-
+    int new_good_fragment;
+    
     result = calloc(datalen,1);
     i = 0;
     if (correspondance) {
@@ -857,6 +886,8 @@ char* suftree_markpresent(char* data, size_t datalen, suftree_t* tree, size_t mi
             correspondance[j] = tree->datalen;
         }
     }
+    lastmatches = 0;
+    lasti0 = 0;
     while (i < datalen) {
         /* find the first mismatch */
         curnode = tree->root;
@@ -885,15 +916,39 @@ char* suftree_markpresent(char* data, size_t datalen, suftree_t* tree, size_t mi
                     matches++;
                 }
             }
+            if (i == datalen) mismatch = 1;
         }
         /* mark result if it is within the minimum length */
+        new_good_fragment = 0;
         if (matches > minlen) {
-            memset(result + i - matches, 1, matches);
-            if (correspondance) {
-                for (j = 0;j < matches;j++) {
-                    correspondance[i - matches + j] = k - matches + j;
-                }                
+            if (i0 < lasti0 + lastmatches) {
+                if (lastmatches > matches) matches -= (lasti0 + lastmatches - i0);
+                if (matches > minlen) new_good_fragment = 1;
             }
+            else {
+                new_good_fragment = 1;
+            }
+            if (new_good_fragment) {
+                memset(result + i - matches, 1, matches);
+                if (i0 - lasti0 < minlen) {
+                    for (j = 0;j < i0 - lasti0;j++) {
+                        if (result[i0 - j - 1]) {
+                            result[i0 - j - 1] = 0;
+                            correspondance[i0 - j - 1] = tree->datalen;
+                        }
+                    }
+                }
+                if (correspondance) {
+                    for (j = 0;j < matches;j++) {
+                        correspondance[i - matches + j] = k - matches + j;
+                    }
+                }
+                lasti0 = i0;
+                lastmatches = matches;
+            }
+        }
+        else if (i0 > lasti0 + lastmatches) {
+            lastmatches = 0;
         }
         /* follow backlinks until reaching a point where the current position is no longer part of the branch */
         if (k > 0) {
@@ -1024,19 +1079,280 @@ static inline int acceptablegap(size_t* data, size_t left, size_t right, size_t 
         return ((data[left] - data[right]) < maxgaperror + (right - left));
 }
 
-char* suftree_approximatesearch(char* data, size_t datalen, suftree_t* tree, size_t seedalign, size_t minlen, size_t maxgaperror) {
+void bridge_substitutions(char* marks, size_t* correspondance, char* data, size_t datalen, char* source, size_t sourcelen, size_t minlen, double wiggle_room, size_t maxgap) {
+    size_t pos, i;
+    size_t readupto;
+    size_t srcmove, qrymove, delta, avgmove;
+    size_t lastblockend, lastblockstart, curblockstart;
+    size_t matching_lbe, matching_lbs, matching_cbs;
+    size_t lastgoodblockend;
+    double slope;
+    int is_good_block;
+    double relative_advance;
+    double expected_delta;
+    double extension_tol;
+    
+    matching_lbe = 0;
+    matching_lbs = 0;
+    matching_cbs = 0;
+    lastblockend = 0;
+    lastblockstart = 0;
+    curblockstart = 0;
+
+    if (datalen < 1) {
+        /*nothing happens*/
+        return;
+    }
+    pos = 0;
+    readupto = datalen - 1;
+    while (pos < readupto && !marks[pos]) {
+        pos++;
+    }
+    if (pos < readupto) {
+        lastblockstart = pos;
+        matching_lbs = correspondance[curblockstart];
+    }
+    /* generate good blocks */
+    while (pos < readupto) {
+        if (marks[pos] && !marks[pos + 1]) {
+            if (pos + 1 - lastblockstart > minlen)
+                lastgoodblockend = lastblockend;
+            lastblockend = pos+1;
+            matching_lbe = correspondance[pos]+1;
+        }
+        else if (!marks[pos] && marks[pos + 1]) {
+            curblockstart = pos+1;
+            matching_cbs = correspondance[curblockstart];
+            qrymove = curblockstart-lastblockend;
+            is_good_block = 0;
+            if (matching_cbs > matching_lbe) {
+                srcmove = matching_cbs - matching_lbe;
+                avgmove = (srcmove + qrymove + 1) / 2;
+                if (srcmove >= qrymove) delta = srcmove - qrymove;
+                else delta = qrymove - srcmove;
+                if ((double)delta < wiggle_room*(double)avgmove && avgmove<maxgap) {
+                    for (i = lastblockend;i < curblockstart;i++) {
+                        relative_advance = ((double)(i - lastblockend)) / ((double)qrymove);
+                        marks[i] = 1;
+                        correspondance[i] = matching_lbe + (size_t)(relative_advance*(double)srcmove);
+                    }
+                    is_good_block = 1;
+                    curblockstart = lastblockstart;
+                }
+            }
+            if (lastblockend - lastblockstart >= minlen) {
+                is_good_block = 1;
+            }
+            if (!is_good_block) {
+                if (lastblockend - lastblockstart < minlen) {
+                    i = lastblockstart;
+                    while (i < lastblockend) {
+                        marks[i] = 0;
+                        /*correspondance[i] = sourcelen;*/
+                        i++;
+                    }
+                }
+            }
+            lastblockstart = curblockstart;
+            matching_lbs = matching_cbs;
+        }
+        else if (marks[pos] && marks[pos + 1]) {
+            if (pos + 1 < readupto) {
+                if (correspondance[pos] >= correspondance[pos + 1])
+                    delta = correspondance[pos] - correspondance[pos + 1] + 1;
+                else
+                    delta = correspondance[pos + 1] - correspondance[pos] - 1;
+                if (delta > minlen) {
+                    marks[pos + 1] = 0;
+                    pos--;
+                }
+            }
+        }
+        pos++;
+    }
+    /* compare correspondance to expected value based on good blocks */
+    pos = 0;
+    while (pos < readupto) {
+        if (!marks[pos] && marks[pos+1]) {
+            pos++;
+            curblockstart = pos;
+            while (pos < readupto && marks[pos]) pos++;
+            lastblockend = pos;
+            qrymove = pos - curblockstart;
+            srcmove = correspondance[pos - 1] - correspondance[curblockstart];
+            slope = ((double)srcmove) / ((double)qrymove);
+            i = curblockstart - 1;
+            expected_delta = slope;
+            extension_tol = 1 + wiggle_room;
+            while (i > 0 && !marks[i] && expected_delta<(double)(correspondance[curblockstart]) && (size_t)expected_delta<maxgap) {
+                srcmove = correspondance[curblockstart] - correspondance[i];
+                if (correspondance[i] < correspondance[curblockstart] && (double)srcmove > expected_delta/extension_tol && (double)srcmove < expected_delta*extension_tol) {
+                    marks[i] = 1;
+                }
+                i--;
+                expected_delta = slope*((double)(curblockstart - i));
+            }
+
+            i = lastblockend;
+            expected_delta = slope;
+            while (i < readupto && !marks[i] && expected_delta<(double)(sourcelen-correspondance[lastblockend-1]) && (size_t)expected_delta<maxgap) {
+                srcmove = correspondance[i] - correspondance[lastblockend-1];
+                if (correspondance[i] > correspondance[lastblockend - 1] && (double)srcmove > expected_delta/extension_tol && (double)srcmove < expected_delta*extension_tol) {
+                    marks[i] = 1;
+                }
+                i++;
+                expected_delta = slope*((double)(i - lastblockend+1));
+            }
+        }
+        pos++;
+    }
+    pos = 0;
+    while (pos < readupto) {
+        if (!marks[pos]) correspondance[pos] = sourcelen;
+        if (correspondance[pos] >= sourcelen) marks[pos] = 0;
+        pos++;
+    }
+}
+
+char* suftree_approximatesearch_coarse(char* data, size_t datalen, suftree_t* tree, size_t seedalign, size_t minlen, size_t maxgaperror, int add_unaligned_lengths) {
+    char* marks;
+    size_t* correspondance;
+    size_t* blockstarts;
+    size_t* blocklens;
+    size_t* blockpotential;
+    size_t* blockweight;
+    size_t numblocks, numblocks_alloc, maxnumblocks;
+    size_t curgap,curblock;
+    size_t pos, i, j;
+    size_t querymove, refmove;
+    if (data && datalen > 0) {
+        correspondance = malloc(sizeof(size_t)*datalen);
+        marks = suftree_markpresent(data, datalen, tree, seedalign/2, correspondance);
+        numblocks = 0;
+        numblocks_alloc = 2;
+        blockstarts = (size_t*) malloc(sizeof(size_t)*numblocks_alloc);
+        blocklens = (size_t*)malloc(sizeof(size_t)*numblocks_alloc);
+        curblock = 0;
+        if (marks[0]) {
+            blockstarts[0] = 0;
+            numblocks++;
+        }
+        /* identify block locations */
+        for (pos = 1;pos < datalen;pos++) {
+            if (marks[pos]) {
+                if (!marks[pos] || correspondance[pos - 1] + 2 < correspondance[pos - 1] || correspondance[pos - 1] > correspondance[pos]) {
+                    if (numblocks >= numblocks_alloc - 1) {
+                        numblocks_alloc <<= 1;
+                        blockstarts = (size_t*)realloc(blockstarts, sizeof(size_t)*numblocks_alloc);
+                        blocklens = (size_t*)realloc(blocklens, sizeof(size_t)*numblocks_alloc);
+                    }
+                    blockstarts[numblocks] = pos;
+                    curblock = numblocks;
+                    numblocks++;
+                    blocklens[curblock] = 0;
+                }
+                blocklens[curblock]++;
+            }
+        }
+        blockpotential = (size_t*)malloc(sizeof(size_t)*numblocks);
+        blockweight = (size_t*)malloc(sizeof(size_t)*numblocks);
+        /* calculate immediate block extension potential */
+        for (i = 0;i < numblocks;i++) {
+            j = i + 1;
+            /* find the last block to which the current block could potentially be extended */
+            while (j < numblocks && blockstarts[j] - blockstarts[i] < tree->datalen + maxgaperror)
+                j++;
+            /* find an extension that actually makes sense */
+            do {
+                j--;
+                querymove = blockstarts[j] - blockstarts[i];
+                if (correspondance[blockstarts[j]] > correspondance[blockstarts[i]]) {
+                    refmove = correspondance[blockstarts[j]] - correspondance[blockstarts[i]];
+                }
+                else
+                    refmove = 0;
+                if (querymove < refmove) curgap = refmove - querymove;
+                else curgap = querymove - refmove;
+            } while (j > i && curgap > maxgaperror);
+            blockpotential[i] = blockstarts[j] - blockstarts[i] + blocklens[j];
+        }
+        /* remove blocks with too little potential */
+        maxnumblocks = numblocks;
+        numblocks = 0;
+        memset(marks, 0, datalen);
+        for (i = 0;i < maxnumblocks;i++) {
+            if (blockpotential[i] > minlen) {
+                memset(marks + blockstarts[i], 1, blockpotential[i]);
+                numblocks++;
+            }
+        }
+        free(blockstarts);
+        free(blocklens);
+        free(blockpotential);
+
+        /*expand aligned regions to match the original sequence's length*/
+        if (add_unaligned_lengths) {
+            while (pos < datalen) {
+                if (!marks[pos] && marks[pos - 1]) {
+                    j = tree->datalen - correspondance[pos - 1] - 1;
+                    if (pos + j > datalen) j = datalen - pos;
+                    memset(marks + pos, 1, j);
+                    pos += j;
+                }
+                else if (marks[pos] && !marks[pos - 1]) {
+                    j = correspondance[pos];
+                    if (j > pos) j = pos;
+                    memset(marks + pos - j, 1, j);
+                }
+                pos++;
+            }
+        }
+        free(correspondance);
+
+        return marks;
+    }
+    return NULL;
+}
+char* suftree_approximatesearch_rough(char* data, size_t datalen, suftree_t* tree, size_t seedalign, size_t minlen, size_t maxgaperror, int add_unaligned_lengths) {
     char* marks;
     size_t* correspondance;
     size_t removed, pos, prevblock2, prevblock1, curblock;
     size_t j;
     size_t prevblock2pos, prevblock1pos, curblockpos, prevblocklen, curblocklen;
     int regionswitch;
+    /* timing */
+#ifdef _DEBUG
+    clock_t ct;
+    clock_t dct;
+    int nf;
+    size_t maxj;
+    static ht64_t* ht = NULL;
+    if (!ht) ht = ht64_alloc_size(100);
+    if (0) {
+        size_t** names;
+        int64_t* values;
+        maxj = ht64_astables(ht, (char***)(&names), NULL, &values);
+        for (j = 0;j < maxj;j++) free(names[j]);
+        free(names);
+        free(values);
+    }
+#endif
     /* get all alignment instances */
     correspondance = malloc(sizeof(size_t)*datalen);
-    marks = suftree_markpresent(data, datalen, tree, seedalign, correspondance);
+#ifdef _DEBUG
+    ct = clock();
+#endif
+    marks = suftree_markpresent(data, datalen, tree, seedalign/2+1, correspondance);
+#ifdef _DEBUG
+    dct = clock() - ct;
+    ht64_set(ht, (char*)(&datalen), sizeof(size_t), (int64_t)dct, &nf);
+#endif
+    bridge_substitutions(marks, correspondance, data, datalen, tree->data, tree->datalen, seedalign, 0.2, maxgaperror);
+    bridge_substitutions(marks, correspondance, data, datalen, tree->data, tree->datalen, seedalign, 0.2, maxgaperror);
+    bridge_substitutions(marks, correspondance, data, datalen, tree->data, tree->datalen, seedalign, 1.0, seedalign);
     /* recursively extend selection over acceptable non-overlapped regions */
     removed = 1;
-    while (removed) {
+    while (0) {
         removed = 0;
         prevblock1pos = 0;
         prevblock2pos = 0;
@@ -1096,9 +1412,36 @@ char* suftree_approximatesearch(char* data, size_t datalen, suftree_t* tree, siz
             regionswitch = 0;
         }
     }
-    if (correspondance)
+    if (j < minlen)
+        memset(marks + pos - j, 0, j);
+    /*expand aligned regions to match the original sequence's length*/
+    if (correspondance) {
+        pos = 1;
+        while (pos < datalen) {
+            if (!marks[pos] && marks[pos - 1]) {
+                j = tree->datalen - correspondance[pos - 1] - 1;
+                if (pos + j > datalen) j = datalen - pos;
+                memset(marks + pos, 1, j);
+                pos += j;
+            }
+            else if (marks[pos] && !marks[pos - 1]) {
+                j = correspondance[pos];
+                if (j > pos) j = pos;
+                memset(marks + pos - j, 1, j);
+            }
+            pos++;
+        }
         free(correspondance);
+    }
     return marks;
+}
+
+char* suftree_approximatesearch(char* data, size_t datalen, suftree_t* tree, size_t seedalign, size_t minlen, size_t maxgaperror, int add_unaligned_lengths) {
+    return suftree_approximatesearch_rough(data, datalen, tree, seedalign, minlen, maxgaperror, add_unaligned_lengths);
+}
+
+size_t suftree_datalen(suftree_t* tree) {
+    return tree->datalen;
 }
 
 char** marks_split(char* data, char* marks, size_t datalen, size_t** output_lens, size_t* output_amount, int tokeep) {
@@ -1149,10 +1492,18 @@ char** marks_split(char* data, char* marks, size_t datalen, size_t** output_lens
         memcpy(result[nseqs], data + datalen - count, count);
         nseqs++;
     }
-    result = (char**)realloc(result, sizeof(char*)*nseqs);
-    tmp_output_lens = (size_t*)realloc(tmp_output_lens, sizeof(size_t)*nseqs);
-    *output_amount = nseqs;
+    if (nseqs > 0) {
+        result = (char**)realloc(result, sizeof(char*)*nseqs);
+        tmp_output_lens = (size_t*)realloc(tmp_output_lens, sizeof(size_t)*nseqs);
+    }
+    else {
+        free(result);
+        free(tmp_output_lens);
+        result = NULL;
+        tmp_output_lens = NULL;
+    }
     *output_lens = tmp_output_lens;
+    *output_amount = nseqs;
     return result;
 }
 char* mark_correspondance_points(char* querymarks, size_t* correspondance, size_t querylen, size_t sourcelen) {
@@ -1212,6 +1563,11 @@ void remove_disordered_marks(char* marks, size_t* correspondance, size_t datalen
     count = 0;
     maxcorrespondance = 0;
     for (i = 0;i < datalen;i++) {
+        if (nseqs + 1 > nseqsalloc) {
+            nseqsalloc *= 2;
+            part_lens = (int64_t*)realloc(part_lens, sizeof(int64_t)*nseqsalloc);
+            part_starts = (size_t*)realloc(part_starts, sizeof(size_t)*nseqsalloc);
+        }
         if (correspondance[i] > maxcorrespondance) {
             maxcorrespondance = correspondance[i];
             if (i == datalen - 1)maxcorrespondance=correspondance[i]+1;
@@ -1220,11 +1576,6 @@ void remove_disordered_marks(char* marks, size_t* correspondance, size_t datalen
             mode = (marks[i] != 0);
             if (mode) {
                 curstart = i;
-                if (nseqs + 1 > nseqsalloc) {
-                    nseqsalloc *= 2;
-                    part_lens = (int64_t*)realloc(part_lens, sizeof(int64_t)*nseqsalloc);
-                    part_starts = (size_t*)realloc(part_starts, sizeof(size_t)*nseqsalloc);
-                }
             }
             else {
                 part_lens[nseqs] = count;
@@ -1239,11 +1590,6 @@ void remove_disordered_marks(char* marks, size_t* correspondance, size_t datalen
             nseqs++;
             count = 0;
             curstart = i;
-            if (nseqs + 1 > nseqsalloc) {
-                nseqsalloc *= 2;
-                part_lens = (int64_t*)realloc(part_lens, sizeof(int64_t)*nseqsalloc);
-                part_starts = (size_t*)realloc(part_starts, sizeof(size_t)*nseqsalloc);
-            }
         }
         if (mode)count++;
     }
@@ -1287,6 +1633,8 @@ void remove_disordered_marks(char* marks, size_t* correspondance, size_t datalen
         if (!disordered)
             break;
     }
+    if (part_lens) free(part_lens);
+    if (part_starts) free(part_starts);
 }
 void expand_marks(char* data, char* marks, size_t* correspondance, size_t datalen, char* reference, size_t reflen, int errorcost, int matchgain, int threshold) {
     size_t i;
@@ -1361,29 +1709,31 @@ size_t count_marks(char* marks, size_t datalen) {
     return result;
 }
 
-size_t* find_high_deltas(size_t* function, size_t datalen, size_t* ngaps, size_t high_delta_threshold) {
+size_t* find_high_deltas(size_t* function, size_t datalen, size_t* ngaps, size_t high_delta_threshold, int expected_change) {
     size_t i;
     size_t _ngaps;
     size_t* result;
+    long long hdt;
 
+    hdt = (long long)high_delta_threshold;
     _ngaps = 0;
     for (i = 1;i < datalen;i++) {
         if (function[i] > function[i - 1]) {
-            if (function[i] - function[i - 1] > high_delta_threshold) _ngaps++;
+            if ((long long)(function[i] - function[i - 1]) > hdt + expected_change) _ngaps++;
         }
-        else if (function[i-1] - function[i] > high_delta_threshold) _ngaps++;
+        else if ((long long)(function[i-1] - function[i]) > hdt - expected_change) _ngaps++;
     }
     result = malloc(sizeof(size_t)*_ngaps);
     *ngaps = _ngaps;
     _ngaps = 0;
     for (i = 1;i < datalen;i++) {
         if (function[i] > function[i - 1]) {
-            if (function[i] - function[i - 1] > high_delta_threshold) {
+            if ((long long)(function[i] - function[i - 1]) > hdt + expected_change) {
                 result[_ngaps] = i;
                 _ngaps++;
             }
         }
-        else if (function[i - 1] - function[i] > high_delta_threshold) {
+        else if ((long long)(function[i - 1] - function[i]) > hdt - expected_change) {
             result[_ngaps] = i;
             _ngaps++;
         }
@@ -1397,7 +1747,7 @@ size_t* find_high_deltas(size_t* function, size_t datalen, size_t* ngaps, size_t
 #define EDIT_IDENTITY   3
 #define EDIT_NONE       4
 
-size_t edit_cost(int A, int B, int prevedit) {
+static inline size_t edit_cost(int A, int B, int prevedit) {
     if (A == B) return 0;
     if (A == -1) {
         if (prevedit == EDIT_INSERTION || prevedit == EDIT_NONE) return 1;
@@ -1572,6 +1922,7 @@ size_t _identities_from_edit_distance__shortquery(char* qry, size_t qrylen, char
     identities = 0;
     while (!acceptable_t && t<reflen*delta*2) {
         p = (size_t)((t / delta) - offcenter)/2;
+        if (p > qrylen) p = qrylen;
         jmax = offcenter + 2 * p + 1;
         r = (size_t*)realloc(r, sizeof(size_t)*jmax);
         previdentities = (size_t*)realloc(previdentities, sizeof(size_t)*jmax);
@@ -1588,6 +1939,7 @@ size_t _identities_from_edit_distance__shortquery(char* qry, size_t qrylen, char
             prevsubstitutions[j] = 0;
         }
         /* subsequent rows */
+        finalcost = t+1;
         for (i = 0;i < qrylen;i++) {
             min_edit_cost_leftmost(r, previdentities, prevsubstitutions, prevtype, i, jmax, p, qry, ref);
             if (i + 1 < p) j0 = p - i - 1;
@@ -1612,10 +1964,14 @@ size_t _identities_from_edit_distance__shortquery(char* qry, size_t qrylen, char
         acceptable_t = (finalcost <= t);
         t <<= 1;
     }
-    free(r);
-    free(previdentities);
-    free(prevsubstitutions);
-    free(prevtype);
+    if (r)
+        free(r);
+    if (previdentities)
+        free(previdentities);
+    if (prevsubstitutions)
+        free(prevsubstitutions);
+    if (prevtype)
+        free(prevtype);
     return identities;
 }
 
@@ -1626,7 +1982,7 @@ size_t identities_from_edit_distance(char* seq1, size_t len1, char* seq2, size_t
 }
 
 
-double suftree_roughalign(char* data, size_t datalen, suftree_t* tree, size_t minmatch, size_t smallgapsize, int trim_mismatches) {
+double suftree_roughalign(char* data, size_t datalen, suftree_t* tree, size_t minmatch, size_t smallgapsize, int trim_mismatches, size_t* alnlen) {
     char* marks;
     size_t* correspondance;
     size_t* indexjumps;
@@ -1637,20 +1993,33 @@ double suftree_roughalign(char* data, size_t datalen, suftree_t* tree, size_t mi
     size_t ngaps, extragap;
     size_t matches;
     size_t totallen;
-    size_t i;
+    size_t i, j;
     size_t left, right, rleft, rright, index;
+    size_t correct_end;
     int count_fragment;
-
     correspondance = calloc(datalen, sizeof(size_t));
     marks = suftree_markpresent(data, datalen, tree, minmatch, correspondance);
     remove_disordered_marks(marks, correspondance, datalen);
     expand_marks(data, marks, correspondance, datalen, tree->data, tree->datalen, 1, 1, 1);
-    matches = 0;/*count_marks(marks, datalen);*/
+    matches = 0;/*count_marks(marks, datalen); totallen = datalen;*/
     bridgegaps_1D(marks, datalen, smallgapsize, 1);
     remove_disordered_marks(marks, correspondance, datalen);
 
     totallen = 0;
-    indexjumps = find_high_deltas(correspondance, datalen, &ngaps, 1);
+    indexjumps = find_high_deltas(correspondance, datalen, &ngaps, 1, 0);
+    correct_end = 0;
+    i = datalen - 1;
+    while (i>0 && correspondance[i] >= tree->datalen - 1) {
+        if (correspondance[i - 1] == tree->datalen - 1) correct_end = i;
+        i--;
+    }
+    if (correct_end != 0) {
+        if (correct_end > indexjumps[ngaps - 1]) {
+            ngaps++;
+            indexjumps = realloc(indexjumps,ngaps*sizeof(size_t));
+        }
+        indexjumps[ngaps - 1] = correct_end;
+    }
     i = 0;
     right = left = rright = rleft = 0;
     if (marks[0]) {
@@ -1682,7 +2051,7 @@ double suftree_roughalign(char* data, size_t datalen, suftree_t* tree, size_t mi
                 }
             }
         }
-        if (marks[index - 1] && !marks[index]) {
+        if (marks[index - 1]) {
             left = index;
             rleft = correspondance[index-1]+1;
             if (left + rright > rleft + right) {
@@ -1693,7 +2062,16 @@ double suftree_roughalign(char* data, size_t datalen, suftree_t* tree, size_t mi
                 /* since left is always >= right, in this case "rleft > rright" is guaranteed */
                 totallen += rleft - rright;
             }
+            for (j = right;j < left;j++) {
+                if (data[j] == tree->data[correspondance[j]]) matches++;
+            }
             count_fragment = 1;
+            if (marks[index]) {
+                /* complete deletion between perfect matches */
+                right = index;
+                rright = correspondance[index];
+                totallen += rright - rleft;
+            }
         }
         i++;
     }
@@ -1707,6 +2085,9 @@ double suftree_roughalign(char* data, size_t datalen, suftree_t* tree, size_t mi
         else {
             /* since left is always >= right, in this case "rleft > rright" is guaranteed */
             totallen += rleft - rright;
+        }
+        for (j = right;j < left;j++) {
+            if (data[j] == tree->data[correspondance[j]]) matches++;
         }
         if (rleft < tree->datalen && !trim_mismatches)
             totallen += tree->datalen - rleft;
@@ -1732,8 +2113,9 @@ double suftree_roughalign(char* data, size_t datalen, suftree_t* tree, size_t mi
     free(indexjumps);
     free(marks);
     free(correspondance);
+    if (alnlen)*alnlen = totallen;
     
-    return (double)matches/(double)totallen;
+    return 1-(double)matches/(double)totallen;
 }
 
 char* suftree_firstsharedregions(suftree_t* reference, suftree_t* query, size_t minlen) {

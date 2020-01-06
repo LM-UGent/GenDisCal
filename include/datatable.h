@@ -5,6 +5,8 @@
 
 typedef struct datatable_t datatable_t;
 
+typedef struct dendrogram_t dendrogram_t;
+
 datatable_t* datatable_alloc(size_t ncol, size_t nrow, double autofill);
 void datatable_free(datatable_t* target);
 
@@ -24,6 +26,16 @@ void datatable_setrowname(datatable_t* target, size_t col, const char* name);
 ssize_t datatable_getrowid(datatable_t* target, const char* name);
 char* datatable_getrowname(datatable_t* target, size_t col);
 
+/*
+dmrclust stands for distance matrix rough clustering, and will only work on distance matrices.
+Also, it is a rough sorting algorithm with complexity k*n*log(n) which focuses on clustering
+all closely related vectors together, but not ensureing that proper ordering is observed
+within clusters. Another algorithm should be used on the clusters to achive this.
+*/
+size_t datatable_dmrclust(datatable_t* target, double defaultcut);
+size_t datatable_dmwardclust(datatable_t* target, double defaultcut, PF_t* output_tree);
+size_t datatable_dmsingleclust(datatable_t* target, PF_t* output_tree);
+size_t datatable_dmsortclust(datatable_t* target, double defaultcut);
 #define DATATABLE_WRITECOLNAMES     1
 #define DATATABLE_WRITEROWNAMES     2
 void datatable_write(datatable_t* dt, PF_t* target, const char* sep, uint32_t flags);

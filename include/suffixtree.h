@@ -25,8 +25,9 @@ char* suftree_firstsharedregions(suftree_t* reference, suftree_t* query, size_t 
 #define DATAMARK_BOTTOMSTARS 0
 #define DATAMARK_INTERVALS  1
 void suftree_printmarkeddata(char* marks, char* data, size_t datalen, suftree_t* tree, int outputformat);
-char* suftree_approximatesearch(char* data, size_t datalen, suftree_t* tree, size_t seedalign, size_t minlen, size_t maxgaperror);
-double suftree_roughalign(char* data, size_t datalen, suftree_t* tree, size_t minmatch, size_t smallgapsize, int trim_mismatches);
+char* suftree_approximatesearch(char* data, size_t datalen, suftree_t* tree, size_t seedalign, size_t minlen, size_t maxgaperror, int add_unaligned_lengths);
+double suftree_roughalign(char* data, size_t datalen, suftree_t* tree, size_t minmatch, size_t smallgapsize, int trim_mismatches, size_t* alnlen);
+size_t suftree_datalen(suftree_t* tree);
 
 
 #define KEEP_MARKED 0

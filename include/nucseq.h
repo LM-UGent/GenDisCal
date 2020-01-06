@@ -41,6 +41,8 @@ void clear_nucseq(nucseq* target);
 size_t nucseq_from_string(nucseq* target, char* str);
 char* nucseq_tritext(nucseq* target);
 nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, size_t minlen);
+char* nucseq_unimem(nucseq* target,size_t* outlen);
+void nucseq_fromunimem(nucseq* target, char* unimem);
 char* nucseq2fasta(nucseq* target, const char* name);
 void nucseq2fastafile(nucseq* target, PF_t* f, const char* name);
 void nucseqrevcomp(nucseq* src, nucseq* target);
@@ -65,15 +67,6 @@ double nucseq_GC(nucseq* src);
 double* nucseq_GC_multiple(nucseq** src, size_t numseq);
 size_t minimal_qscore(nucseq* seq);
 
-double* freqsig(uint32_t* counts, int k_len);
-double* TETRAsig(uint32_t* counts);
-double* karlinsig(uint32_t* counts, int k_len);
-int64_t* minhash_Msig(nucseq** allsequences, size_t nseqs, int k, size_t siglen, size_t genomesize_est);
-double* multifreqsig(nucseq** allsequences, size_t nseqs, int k, size_t winsize, char* primer);
-double* multikarlsig(nucseq** allsequences, size_t nseqs, int k, size_t winsize, size_t minstep);
-double* fullmarkovsig(uint32_t* counts, int k);
-double* fullmarkovsig_zscore(uint32_t* counts, int k);
-
 size_t alignmatch(nucseq* toalign, nucseq* src, int64_t offset);
 int64_t best_perfect_align(nucseq* target, nucseq* src);
 
@@ -89,4 +82,7 @@ size_t concactseqs(nucseq* target, nucseq* left, nucseq* right);
 size_t appendtoseq(nucseq* target, nucseq* right);
 size_t nucsearch(nucseq* data, nucseq* pattern);
 size_t nucsearch_from(nucseq* data, nucseq* pattern, size_t start);
+
+int64_t* minhash_Msig(nucseq** allsequences, size_t nseqs, int k, size_t siglen, size_t genomesize_est);
+
 #endif

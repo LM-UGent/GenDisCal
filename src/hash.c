@@ -1,7 +1,32 @@
+/*
+MIT License
+
+Copyright (c) 2019 Gleb Goussarov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 #include "hash.h"
 #include <stdlib.h>
 
 
+/* TOTO: when a new hash is implemented, add it here*/
 typedef enum hash_type { BASIC_HASH = 0 } hash_type;
 
 struct hash_descriptor_t {
@@ -59,8 +84,27 @@ size_t _hash_index_basic(void* data, size_t datasize, hashdesc_t* desc) {
     h = ((h*factor) + 1) % desc->v2;
     return h%desc->maxavlue;
 }
+
 size_t hash_index(void* data, size_t datasize, hashdesc_t* desc) {
     if (!data)return -1;
     if (desc->id == BASIC_HASH) return _hash_index_basic(data, datasize, desc);
     return -1;
+}
+
+void hashdesc_save(hashdesc_t* desc, PF_t* file) {
+    PFputint32(file, (int32_t)(desc->id));
+    PFputint64(file, (int64_t)(desc->maxavlue));
+    PFputint64(file, desc->v1);
+    PFputint64(file, desc->v2);
+    PFputint64(file, desc->v3);
+}
+hashdesc_t* hashdesc_load(PF_t* file) {
+    hashdesc_t* result;
+    result = hashdesc_alloc();
+    result->id = (hash_type)PFgetint32(file);
+    result->maxavlue = (size_t)PFgetint64(file);
+    result->v1 = PFgetint64(file);
+    result->v2 = PFgetint64(file);
+    result->v3 = PFgetint64(file);
+    return result;
 }

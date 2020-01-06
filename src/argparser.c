@@ -1,3 +1,27 @@
+/*
+MIT License
+
+Copyright (c) 2019 Gleb Goussarov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 #include "argparser.h"
 #include "datamap.h"
 #include <stdio.h>
@@ -133,6 +157,13 @@ void argument_setargpattern(argument_t* target, const char* argpattern) {
                     target->maxargcount++;
                     curindex += 5;
                 }
+                else if (argpattern[curindex] == 'v' &&
+                    argpattern[curindex + 1] == 'a' &&
+                    argpattern[curindex + 2] == 'r') {
+                    target->nsargs++;
+                    target->maxargcount++;
+                    curindex += 3;
+                }
                 else if (argpattern[curindex] == 's' &&
                     argpattern[curindex + 1] == 't' &&
                     argpattern[curindex + 2] == 'r') {
@@ -186,6 +217,12 @@ void argument_setargpattern(argument_t* target, const char* argpattern) {
                     argpattern[curindex + 1] == 't' &&
                     argpattern[curindex + 2] == 'r') {
                     target->argpattern[ci] = 's';
+                    ci++;
+                }
+                else if (argpattern[curindex] == 'v' &&
+                    argpattern[curindex + 1] == 'a' &&
+                    argpattern[curindex + 2] == 'r') {
+                    target->argpattern[ci] = 'v';
                     ci++;
                 }
                 while (argpattern[curindex] != ',' && argpattern[curindex] != 0)
@@ -286,6 +323,7 @@ int argument_nextargvalue(argument_t* target, const char* value) {
                 target->cargvaluef++;
                 break;
             case 's':
+            case 'v':
                 valuelen = strlen(value) + 1;
                 target->sargs[target->cargvalues] = (char*)malloc(valuelen);
                 target->sargset[target->cargvalues] = 1;
@@ -614,6 +652,22 @@ char* args_getstr(args_t* target, const char* longname, int argindex, char* defa
     }
     return defaultval;
 }
+int args_getintfromstr(args_t* target, const char* longname, int argindex, int defaultval) {
+    char* strres;
+    int result;
+    strres = args_getstr(target, longname, argindex, NULL);
+    if (!strres) result = defaultval;
+    else result = atoi(strres);
+    return result;
+}
+double args_getdoublefromstr(args_t* target, const char* longname, int argindex, double defaultval) {
+    char* strres;
+    double result;
+    strres = args_getstr(target, longname, argindex, NULL);
+    if (!strres) result = defaultval;
+    else result = atof(strres);
+    return result;
+}
 
 int args_countargs(args_t* target, const char* longname) {
     size_t index;
@@ -744,6 +798,8 @@ void args_fprintspecifichelp(FILE* target, args_t* arg, const char* longname, in
                     fprintf(target, " <real>");
                 if (arg->argvs[argid]->argpattern[i] == 's')
                     fprintf(target, " <text>");
+                if (arg->argvs[argid]->argpattern[i] == 'v')
+                    fprintf(target, " <variable input>");
                 if (arg->argvs[argid]->argpattern[i] == '.')
                     fprintf(target, " <text> [<text>...]");
                 i++;
@@ -758,6 +814,8 @@ void args_fprintspecifichelp(FILE* target, args_t* arg, const char* longname, in
                         fprintf(target, " <real>");
                     if (arg->argvs[argid]->argpattern[i] == 's')
                         fprintf(target, " <text>");
+                    if (arg->argvs[argid]->argpattern[i] == 'v')
+                        fprintf(target, " <variable input>");
                     if (arg->argvs[argid]->argpattern[i] == '.')
                         fprintf(target, " <text> [<text>...]");
                     i++;

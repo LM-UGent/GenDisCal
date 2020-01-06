@@ -1,16 +1,39 @@
+/*
+MIT License
+
+Copyright (c) 2019 Gleb Goussarov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "nucseq.h"
 #include "vecops.h"
 #include "hash_table.h"
-#include "datalist.h"
+#include "nucseq.h"
 
 inline int _nucmatch(nucleotide from, nucleotide to) {
-    // if from = nucN, any nucleotide returns a match
+    /* if from = nucN, any nucleotide returns a match
     // if to = nucN, we don't really know
     // return values
-    // 0: FALSE, 1: TRUE, 2:MAYBE
+    // 0: FALSE, 1: TRUE, 2:MAYBE */
     if (from == nucN) return 1;
     if (from == to) return 1;
     if (to == nucN) return 2;
@@ -184,9 +207,9 @@ nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, s
                 stralloc = 0;
             }
             if (saveseqnames) {
-                curseqname = malloc(strcur + 1);
-                memcpy(curseqname, line + 1, strcur - 1);
-                curseqname[strcur] = 0;
+                curseqname = malloc(strcur);
+                memcpy(curseqname, line + 1, strcur);
+                curseqname[strcur-1] = 0;
             }
             free(line);
         }
@@ -196,9 +219,11 @@ nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, s
                 curseq = (char*)realloc(curseq, stralloc + 1);
                 curseq[stralloc] = 0;
             }
-            memcpy(curseq + strfill, line, strcur);
-            strfill += strcur;
-            curseq[strfill] = 0;
+            if (stralloc > 0) {
+                memcpy(curseq + strfill, line, strcur);
+                strfill += strcur;
+                curseq[strfill] = 0;
+            }
             free(line);
         }
         line = PFreadline(f);
@@ -227,7 +252,60 @@ nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, s
     *OUT_count = nseqs;
     return output;
 }
+char* nucseq_unimem(nucseq* target, size_t* outlen) {
+    char* result;
+    uint64_t resultlen;
+    uint64_t data64;
+    uint32_t data32;
+    char* tmpptr;
+    resultlen = sizeof(uint64_t); /* unimem length */
+    resultlen += sizeof(uint64_t); /* sequence length */
+    resultlen += sizeof(char); /* does the sequence contain qscores? */
+    resultlen += target->len*sizeof(nucleotide); /* storage of sequence data*/
+    if (target->q) resultlen += target->len*sizeof(char); /* storage of q-scores if present */
+    resultlen = sizeof(uint32_t); /* flags */
+    result = malloc(resultlen);
+    tmpptr = result;
+    memcpy(tmpptr, &resultlen, sizeof(uint64_t));
+    tmpptr += sizeof(uint64_t);
+    
+    data64 = target->len;
+    memcpy(tmpptr, &data64, sizeof(uint64_t));
+    tmpptr += sizeof(uint64_t);
+    
+    *tmpptr = (target->q != NULL);
+    tmpptr++;
 
+    memcpy(tmpptr, target->seq, target->len * sizeof(nucleotide));
+    tmpptr += target->len * sizeof(nucleotide);
+    if (target->q) {
+        memcpy(tmpptr, target->q, target->len * sizeof(char));
+        tmpptr += target->len * sizeof(char);
+    }
+
+    data32 = target->flags;
+    if (data32 & READONLY) data32 -= READONLY;
+    if (data32 & NOALLOC) data32 -= NOALLOC;
+    memcpy(tmpptr, &data32, sizeof(uint32_t) );
+
+    return result;
+}
+void nucseq_fromunimem(nucseq* target, char* unimem) {
+    char* cursrc;
+    /* note: the unimem still needs to be freed, also target should be empty */
+    target->len = ((uint64_t*)unimem)[1];
+    target->seq = (nucleotide*)malloc(sizeof(nucleotide)*target->len);
+    cursrc = unimem + sizeof(uint64_t) * 2 + 1;
+    memcpy(target->seq, cursrc, target->len * sizeof(nucleotide));
+    if (unimem[sizeof(uint64_t) * 2]) {
+        target->q = malloc(sizeof(char)*target->len);
+        cursrc += target->len;
+        memcpy(target->seq, cursrc , target->len * sizeof(char));
+    }
+    else {
+        target->q = NULL;
+    }
+}
 void nucseq_array_clear(nucseq** target, size_t count) {
     size_t i;
     for (i = 0;i < count;i++) {
@@ -244,6 +322,12 @@ char* nucseq2fasta(nucseq* target, const char* name)
     char* result = NULL;
     size_t namelen;
     size_t i_, curpos;
+    if (name == NULL) {
+        name = target->name;
+    }
+    if (name == NULL) {
+        name = "UnnamedSequence";
+    }
     namelen = strlen(name);
     result = (char*)malloc(1 + namelen + 1 + target->len + 2);
     if (result) {
@@ -365,16 +449,16 @@ void subseq_nocpy(nucseq* target, nucseq* src, size_t start, size_t len)
     }
 }
 
-size_t twobitseq(nucleotide* nucseqseq, size_t len, char** target) {
+size_t twobitseq(nucleotide* nucseqseq, size_t len, char** target, size_t oldnumel) {
     size_t i;
     uint8_t* result;
     char* curbyte;
     size_t offset;
     size_t numel;
-    
     numel = (len + 3) / 4;
     result = (uint8_t*)(*target);
-    result = realloc(result,numel*sizeof(uint8_t));
+    if (oldnumel < numel)
+        result = realloc(result,numel*sizeof(uint8_t));
     /*note that if len is not a multiple of 4, the last byte will have A's appended to it*/
     curbyte = result;
     offset = 6;
@@ -393,7 +477,7 @@ size_t twobitseq(nucleotide* nucseqseq, size_t len, char** target) {
     *target = (char*)result;
     return numel;
 }
-size_t twobitrcseq(nucleotide* nucseqseq, size_t len, char** target) {
+size_t twobitrcseq(nucleotide* nucseqseq, size_t len, char** target, size_t oldnumel) {
     size_t i;
     uint8_t* result;
     char* curbyte;
@@ -403,7 +487,8 @@ size_t twobitrcseq(nucleotide* nucseqseq, size_t len, char** target) {
 
     numel = (len + 3) / 4;
     result = *target;
-    result = realloc(result, numel * sizeof(uint8_t));
+    if(oldnumel < numel)
+        result = realloc(result, numel * sizeof(uint8_t));
     /*note that if len is not a multiple of 4, the last byte will have A's appended to it*/
     curbyte = result;
     offset = 6;
@@ -916,118 +1001,6 @@ double* freqsig(uint32_t* counts, int k_len)
     return result;
 }
 
-inline int count_set_bits(uint64_t value) {
-    // For other ways to count bits, refer to:
-    //  http://graphics.stanford.edu/~seander/bithacks.html#CountBitsSetTable 
-    uint64_t v = value;
-    unsigned int c;
-    for (c = 0; v; c++) {
-        v &= v - 1; // clear the least significant bit set
-    }
-    return c;
-}
-
-uint64_t bindex(uint64_t S, uint64_t B, int setbits) {
-    // S represents [X_1 X_2 ... X_k] as SUM_n(X_n*4^n)
-    // B represents [B_1 B_2 ... B_k] as SUM_n(B_n*2^n)
-    // setbits is equal to SUM_n(B_n)
-    int c, X;
-    uint64_t mask = 1;
-    uint64_t div = 1;
-    uint64_t mult = 1;
-    uint64_t toret = -1;
-    if (B != 0) {
-        toret = 0;
-        for (c = 0;c < setbits;c++) {
-            // count up to the next next non-zero bit
-            while ((mask&B) == 0) {
-                mask <<= 1;
-                div *= 4;
-            }
-            // get the appropriate digit
-            X = (S / div) % 4;
-            toret += X*mult;
-            // go to the next digit
-            mult *= 4;
-            div *= 4;
-            mask <<= 1;
-        }
-    }
-    return toret;
-}
-
-double* karlinsig(uint32_t* counts, int k)
-{
-    uint64_t idx, i;
-    double* rho;
-    double value;
-    uint64_t s, s_max;
-    uint64_t b, b_max;
-    int* nCkSB;
-    uint64_t** CkSB = NULL;
-    uint64_t CkS0 = 0;
-    int match = 0;
-    int k_parity = k % 2;
-    int denoms = 0;
-    int zero_level = 0;
-    // first calculate the number of elements in counts
-    // number of S combinations: 4^k
-    s_max = (uint64_t)pow(4, k);
-    // number of B combinations: 2^k-2 ( [0 0 ... 0] is not valid and [1 1 ... 1] is already stored in counts)
-    b_max = ((uint64_t)1 << k) - 2;
-    // allocate rho
-    rho = (double*)malloc(sizeof(double)*s_max);
-    // allocate CkSB
-    CkSB = (uint64_t**)malloc(sizeof(uint64_t)*b_max);
-    nCkSB = (int*)malloc(sizeof(int)*b_max);
-    for (b = 0;b < b_max;b++) {
-        nCkSB[b] = count_set_bits(b + 1); // 4^(count_set_bits(b+1))
-        i = 1ULL << (2 * nCkSB[b]);
-        CkSB[b] = (uint64_t*)malloc(sizeof(uint64_t)*i);
-        memset(CkSB[b], 0, sizeof(uint64_t)*i);
-    }
-
-    // Calculate CkSB
-    // iterate over all elements
-    for (s = 0; s < s_max; s++) {
-        // for each combination add the value to the proper place
-        for (b = 0;b < b_max;b++) {
-            idx = bindex(s, b + 1, nCkSB[b]);
-            CkSB[b][idx] += counts[s];
-        }
-        CkS0 += counts[s];
-    }
-    // calculate rho
-    for (s = 0;s < s_max;s++) {
-        if (counts[s] > 0)
-            rho[s] = (double)counts[s] / (double)CkS0;
-        else
-            rho[s] = 1.0 / (double)CkS0 / (double)s_max;
-        for (b = 0;b < b_max;b++) {
-            idx = bindex(s, b + 1, nCkSB[b]);
-            if (CkSB[b][idx] > 0)
-                value = (double)CkSB[b][idx] / (double)CkS0;
-            else
-                value = 1 / (double)CkS0 / (double)nCkSB[b];
-            if (nCkSB[b] % 2 == k_parity)
-                rho[s] *= value;
-            else
-                rho[s] /= value;
-        }
-    }
-    // free CkSB and nCkSB - we do not need them anymore
-    if (CkSB) {
-        for (b = 0;b < b_max;b++) {
-            if (CkSB[b])
-                free(CkSB[b]);
-        }
-        free(CkSB);
-    }
-    if (nCkSB)
-        free(nCkSB);
-    return rho;
-}
-
 void random_nucseq(nucseq* target, size_t nucseq_len, uint32_t seed) {
     size_t i;
     clear_nucseq(target);
@@ -1101,672 +1074,6 @@ void random_weighed_nucseq(nucseq* target, size_t nucseq_len, uint32_t seed, dou
     }
 }
 
-void nucseq_oligocount_to_ht(nucseq* sequence, ht64_t* target, int k) {
-    size_t i;
-    size_t maxi;
-    size_t stk;
-    char* tbs;
-    int nf;
-    size_t ignorecount;
-    size_t keylen;
-    stk = (size_t)k;
-    maxi = sequence->len - stk + 1;
-    tbs = NULL;
-    ignorecount = 0;
-    for (i = 0;i < stk;i++) {
-        if (sequence->seq[i] == nucN)
-            ignorecount = i+1;
-    }
-    for (i = 0;i < maxi;i++) {
-        if (sequence->seq[i+stk-1] == nucN) {
-            ignorecount = k;
-        }
-        if (ignorecount > 0)
-            ignorecount--;
-        else {
-            keylen = twobitseq(sequence->seq + i, stk, &tbs);
-            ht64_inc(target, tbs, stk, 1, &nf);
-        }
-    }
-    free(tbs);
-}
-ht64_t* kmer_table(nucseq** allsequences, size_t nseqs, int k) {
-    /* calculate total size */
-    uint64_t nbins;
-    ht64_t* result;
-    size_t i;
-    nbins = 0;
-    for (i = 0;i < nseqs;i++) {
-        nbins += allsequences[i]->len;
-    }
-    if (nbins > 20000000)nbins = 20000000;
-    result = ht64_alloc_size(nbins);
-    for (i = 0;i < nseqs;i++) {
-        nucseq_oligocount_to_ht(allsequences[i], result, k);
-    }
-    return result;
-}
-
-void nucseq_oligocount_to_hashht(nucseq* sequence, ht64_t* target, int k, hashdesc_t* hash) {
-    size_t i;
-    size_t maxi;
-    size_t stk;
-    uint64_t hkey;
-    char* tbs;
-    char* tbsrc;
-    int nf;
-    size_t ignorecount;
-    size_t keylen;
-    stk = (size_t)k;
-    maxi = sequence->len - stk + 1;
-    tbs = NULL;
-    tbsrc = NULL;
-    ignorecount = 0;
-    for (i = 0;i < stk;i++) {
-        if (sequence->seq[i] == nucN)
-            ignorecount = i + 1;
-    }
-    for (i = 0;i < maxi;i++) {
-        if (sequence->seq[i + stk - 1] == nucN) {
-            ignorecount = k;
-        }
-        if (ignorecount > 0)
-            ignorecount--;
-        else {
-            keylen = twobitseq(sequence->seq + i, stk, &tbs);
-            twobitrcseq(sequence->seq + i, stk, &tbsrc);
-            if (memcmp(tbs, tbsrc, keylen) < 0) {
-                hkey = hash_index(tbs, keylen, hash);
-                ht64_set(target, tbs, keylen, hkey, &nf);
-            }
-            else {
-                hkey = hash_index(tbsrc, keylen, hash);
-                ht64_set(target, tbsrc, keylen, hkey, &nf);
-            }
-        }
-    }
-    free(tbs);
-    free(tbsrc);
-}
-ht64_t* kmerhash_table(nucseq** allsequences, size_t nseqs, int k, hashdesc_t* hash) {
-    uint64_t nbins;
-    ht64_t* result;
-    size_t i;
-    nbins = 0;
-    for (i = 0;i < nseqs;i++) {
-        nbins += allsequences[i]->len;
-    }
-    if (nbins > 20000000)nbins = 20000000;
-    result = ht64_alloc_size(nbins);
-    for (i = 0;i < nseqs;i++) {
-        nucseq_oligocount_to_hashht(allsequences[i], result, k, hash);
-    }
-    return result;
-}
-
-void nucseq_oligocount_to_minhashLht(nucseq* sequence, ht64_t* target, int k, hashdesc_t* hash, size_t mod) {
-    size_t i;
-    size_t maxi;
-    size_t stk;
-    uint64_t hkey;
-    char* tbs;
-    char* tbsrc;
-    int nf;
-    size_t ignorecount;
-    size_t keylen;
-    stk = (size_t)k;
-    maxi = sequence->len - stk + 1;
-    tbs = NULL;
-    tbsrc = NULL;
-    ignorecount = 0;
-    for (i = 0;i < stk;i++) {
-        if (sequence->seq[i] == nucN)
-            ignorecount = i + 1;
-    }
-    for (i = 0;i < maxi;i++) {
-        if (sequence->seq[i + stk - 1] == nucN) {
-            ignorecount = k;
-        }
-        if (ignorecount > 0)
-            ignorecount--;
-        else {
-            keylen = twobitseq(sequence->seq + i, stk, &tbs);
-            twobitrcseq(sequence->seq + i, stk, &tbsrc);
-            if (memcmp(tbs, tbsrc, keylen) < 0) {
-                hkey = hash_index(tbs, keylen, hash);
-                if(hkey%mod==0)
-                    ht64_set(target, tbs, keylen, hkey, &nf);
-            }
-            else {
-                hkey = hash_index(tbsrc, keylen, hash);
-                if (hkey%mod == 0)
-                    ht64_set(target, tbsrc, keylen, hkey, &nf);
-            }
-        }
-    }
-    free(tbs);
-    free(tbsrc);
-}
-ht64_t* kmerhash_minhashLtable(nucseq** allsequences, size_t nseqs, int k, hashdesc_t* hash, size_t mod) {
-    uint64_t nbins;
-    ht64_t* result;
-    size_t i;
-    nbins = 0;
-    for (i = 0;i < nseqs;i++) {
-        nbins += allsequences[i]->len;
-    }
-    if (nbins > 20000000)nbins = 20000000;
-    result = ht64_alloc_size(nbins);
-    for (i = 0;i < nseqs;i++) {
-        nucseq_oligocount_to_minhashLht(allsequences[i], result, k, hash, mod);
-    }
-    return result;
-}
-
-size_t nucseq_minimizers(nucseq* sequence, size_t** target, int k, size_t win) {
-    dlink64_t* nextbestlist;
-    dlink64_t* tmp_dlink;
-    dlink64_t* tmp_dlink2;
-    dlink64_t** positions;
-    size_t* resultarray;
-    size_t actualen;
-    size_t nalloc;
-    size_t i, j, nmins, oldbest, ignorecount;
-    nalloc = 16;
-    if (sequence->len < win) {
-        *target = NULL;
-        return 0;
-    }
-    actualen = win - k + 1;
-    nextbestlist = NULL;
-    positions = (dlink64_t**)calloc(actualen, sizeof(dlink64_t*));
-    /* parse the first window */
-    ignorecount = 0;
-    for (i = 0;i < k;i++) {
-        if (sequence->seq[i] == nucN) ignorecount = i+1;
-    }
-    j = ignorecount;
-    ignorecount = 0;
-    for (i = j;i < win - k;i++) {
-        tmp_dlink = nextbestlist;
-        /* the list is sorted, so the element needs to be inserted at the proper place
-           note: a heap might be better than a linked list... but it is a bit harder to implement
-           */
-        tmp_dlink2 = NULL;
-        if (sequence->seq[i + k - 1] == nucN) ignorecount = k;
-        while (tmp_dlink && (ignorecount > 0 || memcmp(sequence->seq + i, sequence->seq + tmp_dlink->value, k) > 0)) {
-            tmp_dlink2 = tmp_dlink;
-            tmp_dlink = tmp_dlink->next;
-        }
-        if (ignorecount <= 0) {
-            if (tmp_dlink)
-                positions[i] = dlink_insert_before(tmp_dlink, i);
-            else
-                positions[i] = dlink_insert_after(tmp_dlink2, i);
-            if (tmp_dlink2 == NULL)
-                nextbestlist = positions[i];
-        }
-        else {
-            positions[i] = NULL;
-            ignorecount--;
-        }
-    }
-    resultarray = (size_t*)realloc(*target, sizeof(size_t)*nalloc);
-    resultarray[0] = nextbestlist->value;
-    oldbest = nextbestlist->value;
-    nmins = 1;
-    for (i = actualen;i < sequence->len - k + 1;i++) {
-        j = i%actualen;
-        if (positions[j] == nextbestlist)
-            nextbestlist = positions[j]->next;
-        if(positions[j])
-            dlink_remove(positions[j]);
-        tmp_dlink = nextbestlist;
-        tmp_dlink2 = NULL;
-        if (sequence->seq[i] == nucN) ignorecount = k;
-        while (tmp_dlink && (ignorecount > 0 || memcmp(sequence->seq + i, sequence->seq + tmp_dlink->value, k) > 0)) {
-            tmp_dlink2 = tmp_dlink;
-            tmp_dlink = tmp_dlink->next;
-        }
-        if (ignorecount <= 0) {
-            if (tmp_dlink)
-                positions[j] = dlink_insert_before(tmp_dlink, i);
-            else if (tmp_dlink2)
-                positions[j] = dlink_insert_after(tmp_dlink2, i);
-            if (tmp_dlink2 == NULL)
-                nextbestlist = positions[j];
-            if (oldbest != nextbestlist->value) {
-                oldbest = nextbestlist->value;
-                if (nmins >= nalloc) {
-                    nalloc *= 2;
-                    resultarray = (size_t*)realloc(resultarray, sizeof(size_t)*nalloc);
-                }
-                resultarray[nmins] = nextbestlist->value;
-                nmins++;
-            }
-        }
-        else{
-            positions[j] = NULL;
-            ignorecount--;
-        }
-    }
-    for (j = 0;j < actualen;j++) {
-        if (positions[j])
-            dlink_remove(positions[j]);
-    }
-    resultarray = (size_t*)realloc(resultarray, sizeof(size_t)*nmins);
-    *target = resultarray;
-    ___added_values___(0);
-    free(positions);
-    return nmins;
-}
-void nucseq_minicount_to_hashht(nucseq* sequence, ht64_t* target, int k, size_t win, hashdesc_t* hash) {
-    size_t i, nmins, minimizer, keylen;
-    uint64_t hkey;
-    size_t* minimizers;
-    char* tbs, *tbsrc;
-    int nf;
-    size_t stk;
-    stk = k;
-    minimizers = NULL;
-    nmins = nucseq_minimizers(sequence, &minimizers, k, win);
-    tbs = tbsrc = NULL;
-    for (i = 0;i < nmins;i++) {
-        minimizer = minimizers[i];
-        keylen = twobitseq(sequence->seq + i, stk, &tbs);
-        twobitrcseq(sequence->seq + i, stk, &tbsrc);
-        if (memcmp(tbs, tbsrc, keylen) < 0) {
-            hkey = hash_index(tbs, keylen, hash);
-            ht64_set(target, tbs, keylen, hkey, &nf);
-        }
-        else {
-            hkey = hash_index(tbsrc, keylen, hash);
-            ht64_set(target, tbsrc, keylen, hkey, &nf);
-        }
-    }
-    free(minimizers);
-    free(tbs);
-    free(tbsrc);
-}
-ht64_t* minimizerhash_table(nucseq** allsequences, size_t nseqs, int k, size_t win, hashdesc_t* hash){
-    uint64_t nbins;
-    ht64_t* result;
-    size_t i;
-    nbins = 0;
-    for (i = 0;i < nseqs;i++) {
-        nbins += allsequences[i]->len;
-    }
-    if (nbins > 2000000)nbins = 2000000;
-    result = ht64_alloc_size(nbins);
-    for (i = 0;i < nseqs;i++) {
-        nucseq_minicount_to_hashht(allsequences[i], result, k, win, hash);
-    }
-    return result;
-}
-
-int64_t* minhash_Msig_old(nucseq** allsequences, size_t nseqs, int k, size_t siglen, size_t genomesize_est) {
-    ht64_t* ht_seq;
-    hashdesc_t* hash;
-    int64_t* valuetable;
-    int64_t* valuetable2;
-    size_t nkmers;
-    size_t i, j;
-    size_t mod;
-    hash = hashdesc_alloc();
-    hashdesc_init_fingerprint64(hash);
-    ht_seq = kmerhash_table(allsequences, nseqs, k, hash);
-    nkmers = ht64_astables(ht_seq, NULL, NULL, &valuetable);
-    vec_sorti64(valuetable, nkmers);
-    mod = (genomesize_est / siglen) / 3 * 2;
-    valuetable2 = (int64_t*)malloc(sizeof(int64_t)*(siglen + 1));
-    j = 0;
-    i = 0;
-    valuetable2[0] = nkmers;
-    while (i < nkmers && j < siglen) {
-        if (valuetable[i] % mod == 0) {
-            valuetable2[j + 1] = valuetable[i];
-            j++;
-        }
-        i++;
-    }
-    free(valuetable);
-    if (siglen > j) {
-        for (i = j;i < siglen;i++)
-            valuetable2[i] = 0x7FFFFFFFFFFFFFFF;
-        /* by using this number, we guarantee that these values will have the lowest priority*/
-    }
-    /*cleanup*/
-    ht64_free(ht_seq);
-    hashdesc_free(hash);
-    return valuetable2;
-}
-int64_t* minhash_Msig(nucseq** allsequences, size_t nseqs, int k, size_t siglen, size_t genomesize_est) {
-    ht64_t* ht_seq;
-    hashdesc_t* hash;
-    int64_t* valuetable;
-    int64_t* valuetable2;
-    size_t nkmers;
-    size_t i,j;
-    size_t mod;
-    hash = hashdesc_alloc();
-    mod = (genomesize_est / siglen) / 3 * 2;
-    hashdesc_init_fingerprint64(hash);
-    ht_seq = kmerhash_minhashLtable(allsequences, nseqs, k, hash, mod);
-    nkmers = ht64_astables(ht_seq, NULL, NULL, &valuetable);
-    vec_sorti64(valuetable, nkmers);
-    valuetable2 =(int64_t*) malloc(sizeof(int64_t)*(siglen + 1));
-    j = 0;
-    i = 0;
-    valuetable2[0] = nkmers;
-    while (i < nkmers && j < siglen) {
-        valuetable2[j + 1] = valuetable[i];
-        j++;
-        i++;
-    }
-    free(valuetable);
-    if (siglen > j) {
-        for (i = j;i < siglen;i++)
-            valuetable2[i] = 0x7FFFFFFFFFFFFFFF;
-        /* by using this number, we guarantee that these values will have the lowest priority*/
-    }
-    /*cleanup*/
-    ht64_free(ht_seq);
-    hashdesc_free(hash);
-    return valuetable2;
-}
-
-
-double* multifreqsig(nucseq** allsequences, size_t nseqs, int k, size_t winsize, char* primer) {
-    nucseq** subseqs;
-    uint32_t* oligos;
-    size_t maxvecid;
-    size_t numel_sig;
-    size_t numel_tot;
-    size_t i, j, m, bestseqid;
-    size_t nsubseqs;
-    double** freqsigs;
-    double* result;
-    double* currentbestsig;
-    double score;
-    double bestscore;
-    nucseq tmpseq = EMPTYSEQ;
-    nucseq targetseq = EMPTYSEQ;
-    nucseq_from_string(&tmpseq, primer);
-    numel_sig = 1LL << (2 * k);
-    numel_tot = numel_sig * numel_sig;
-    maxvecid = 0;
-    result = (double*)malloc(sizeof(double)*numel_tot);
-    subseqs = nucseq_cutoutmultiple(allsequences, nseqs, &tmpseq, NULL, winsize-1+tmpseq.len, &nsubseqs, NUCCUT_ALLOWOVERLAP|NUCCUT_REQUIRE_BEGIN|NUCCUT_CONSIDERRC);
-    if (nsubseqs == 0) {
-        memset(result, 0, sizeof(double)*numel_tot);
-        return result; /* ABORT */
-    }
-    freqsigs = (double**)malloc(sizeof(double*)*nsubseqs);
-    for (j = 0;j < nsubseqs;j++) {
-        oligos = oligocount_2strand(subseqs[j], k);
-        freqsigs[j] = freqsig(oligos, k);
-        free(oligos);
-    }
-    for (i = 0;i < numel_sig;i++) {
-        random_weighed_nucseq(&targetseq, 3000, (uint32_t)i, NULL, 4);
-        bestseqid = -1;
-        bestscore = 0;
-        currentbestsig = freqsigs[0];
-        for (j = 0;j < nsubseqs;j++) {
-            if (subseqs[j]->len == winsize-1+tmpseq.len) {
-                score = amino_acid_identity(&targetseq,subseqs[j]);
-                if (score > bestscore) {
-                    currentbestsig = freqsigs[j];
-                    bestscore = score;
-                    bestseqid = j;
-                }
-            }
-        }
-        m = i*numel_sig;
-        for (j = 0;j < numel_sig;j++) {
-            result[j + m] = currentbestsig[j];
-        }
-    }
-    clear_nucseq(&targetseq);
-    for (j = 0;j < nsubseqs;j++) {
-        free(freqsigs[j]);
-    }
-    free(freqsigs);
-    nucseq_array_clear(subseqs, nsubseqs);
-    clear_nucseq(&tmpseq);
-    return result;
-}
-double* multikarlsig(nucseq** allsequences, size_t nseqs, int k, size_t winsize, size_t minstep) {
-    nucseq** subseqs;
-    uint32_t* oligos;
-    size_t maxvecid;
-    size_t outputamnt;
-    size_t numel_sig;
-    size_t numel_tot;
-    size_t i, j, m;
-    double* result;
-    double* currentbestsig;
-    double* tmpsig;
-    numel_sig = 1LL << (2 * k);
-    numel_tot = numel_sig * numel_sig;
-    subseqs = nucseq_winreadmultiple(allsequences, nseqs, &outputamnt, winsize, minstep);
-    maxvecid = 0;
-    result = (double*)malloc(sizeof(double)*numel_tot);
-    for (i = 0;i < numel_sig;i++) {
-        oligos = oligocount(subseqs[0], k);
-        currentbestsig = karlinsig(oligos, k);
-        free(oligos);
-        for (j = 1;j < outputamnt;j++) {
-            oligos = oligocount(subseqs[0], k);
-            tmpsig = karlinsig(oligos, k);
-            free(oligos);
-            if (tmpsig[i] > currentbestsig[i]) {
-                free(currentbestsig);
-                currentbestsig = tmpsig;
-            }
-            else
-                free(tmpsig);
-        }
-        m = i*numel_sig;
-        for (j = 0;j < numel_sig;j++) {
-            result[j + m] = currentbestsig[j];
-        }
-        free(currentbestsig);
-    }
-    return result;
-}
-
-double* fullmarkovsig(uint32_t* counts, int k) {
-    uint64_t full_max, leftright_max, centre_max;
-    uint64_t i;
-    uint64_t fullcount_i;
-    double* result;
-    uint64_t* left_i;
-    uint64_t* right_i;
-    uint64_t* centre_i;
-    uint64_t* left_target;
-    uint64_t* right_target;
-    uint64_t* centre_target;
-    double fullcount;
-    double expectation;
-    double tmpleft;
-    double tmpright;
-    double tmpcentre;
-    uint64_t lmask;
-    uint64_t rmask;
-    uint64_t cmask;
-    full_max = (uint64_t)pow(4, k);
-    result = (double*)calloc(full_max, sizeof(double));
-    /* if the intersection between left and right would be "shorter than 1", abort*/
-    if (k < 3) return result;
-    leftright_max = (full_max >> 2);
-    centre_max = (full_max >> 4);
-    
-    lmask = ((full_max - 1) - 0b11);
-    rmask = ((full_max - 1) >> 2);
-    cmask = (lmask & rmask);
-
-    left_i = (uint64_t*)calloc(leftright_max, sizeof(uint64_t));
-    right_i = (uint64_t*)calloc(leftright_max, sizeof(uint64_t));
-    centre_i = (uint64_t*)calloc(centre_max, sizeof(uint64_t));
-
-    left_target = (uint64_t*)malloc(full_max*sizeof(uint64_t));
-    right_target = (uint64_t*)malloc(full_max*sizeof(uint64_t));
-    centre_target = (uint64_t*)malloc(full_max*sizeof(uint64_t));
-
-    fullcount_i = 0;
-    for (i = 0;i < full_max;i++) {
-        fullcount_i += counts[i];
-        left_target[i] = ((i&lmask) >> 2);
-        right_target[i] = (i&rmask);
-        centre_target[i] = ((i&cmask) >> 2);
-        left_i[left_target[i]] += counts[i];
-        right_i[right_target[i]] += counts[i];
-        centre_i[centre_target[i]] += counts[i];
-    }
-    fullcount = (double)fullcount_i;
-
-    for (i = 0;i < full_max;i++) {
-        tmpleft = (double)(left_i[left_target[i]]);
-        tmpright = (double)(right_i[right_target[i]]);
-        tmpcentre = (double)centre_i[left_target[i]];
-        expectation = tmpleft*tmpright / tmpcentre;
-        result[i] = (double)counts[i] / expectation;
-    }
-    return result;
-}
-double* fullmarkovsig_zscore(uint32_t* counts, int k) {
-    uint64_t full_max, leftright_max, centre_max;
-    uint64_t i;
-    uint64_t fullcount_i;
-    double* result;
-    uint64_t* left_i;
-    uint64_t* right_i;
-    uint64_t* centre_i;
-    uint64_t* left_target;
-    uint64_t* right_target;
-    uint64_t* centre_target;
-    double fullcount;
-    double expectation;
-    double variance;
-    double tmpleft;
-    double tmpright;
-    double tmpcentre;
-    uint64_t lmask;
-    uint64_t rmask;
-    uint64_t cmask;
-    full_max = (uint64_t)pow(4, k);
-    result = (double*)calloc(full_max, sizeof(double));
-    /* if the intersection between left and right would be "shorter than 1", abort*/
-    if (k < 3) return result;
-    leftright_max = (full_max >> 2);
-    centre_max = (full_max >> 4);
-
-    lmask = ((full_max - 1) - 0b11);
-    rmask = ((full_max - 1) >> 2);
-    cmask = (lmask & rmask);
-
-    left_i = (uint64_t*)calloc(leftright_max, sizeof(uint64_t));
-    right_i = (uint64_t*)calloc(leftright_max, sizeof(uint64_t));
-    centre_i = (uint64_t*)calloc(centre_max, sizeof(uint64_t));
-
-    left_target = (uint64_t*)malloc(full_max * sizeof(uint64_t));
-    right_target = (uint64_t*)malloc(full_max * sizeof(uint64_t));
-    centre_target = (uint64_t*)malloc(full_max * sizeof(uint64_t));
-
-    fullcount_i = 0;
-    for (i = 0;i < full_max;i++) {
-        fullcount_i += counts[i];
-        left_target[i] = ((i&lmask) >> 2);
-        right_target[i] = (i&rmask);
-        centre_target[i] = ((i&cmask) >> 2);
-        left_i[left_target[i]] += counts[i];
-        right_i[right_target[i]] += counts[i];
-        centre_i[centre_target[i]] += counts[i];
-    }
-    fullcount = (double)fullcount_i;
-
-    for (i = 0;i < full_max;i++) {
-        tmpleft = (double)(left_i[left_target[i]]);
-        tmpright = (double)(right_i[right_target[i]]);
-        tmpcentre = (double)centre_i[left_target[i]];
-        expectation = tmpleft*tmpright / tmpcentre;
-        variance = expectation*(tmpcentre - tmpleft)*(tmpcentre - tmpright) / (tmpcentre*tmpcentre);
-        result[i] = ((double)counts[i] - expectation)/(sqrt(variance));
-    }
-    return result;
-}
-
-double* TETRAsig(uint32_t* counts)
-{
-    int k = 4;
-    uint64_t idx, i;
-    double* rho;
-    double E, var;
-    uint64_t s, s_max;
-    uint64_t b, b_max;
-    int* nCkSB;
-    uint64_t** CkSB = NULL;
-    uint64_t CkS0 = 0;
-    double N123, N234, N23;
-    int match = 0;
-    int k_parity = k % 2;
-    int denoms = 0;
-    int zero_level = 0;
-    // first calculate the number of elements in counts
-    // number of S combinations: 4^k
-    s_max = (uint64_t)pow(4, k);
-    // number of B combinations: 2^k-2 ( [0 0 ... 0] is not valid and [1 1 ... 1] is already stored in counts)
-    b_max = ((uint64_t)1 << k) - 2;
-    // allocate rho
-    rho = (double*)malloc(sizeof(double)*s_max);
-    // allocate CkSB
-    CkSB = (uint64_t**)malloc(sizeof(uint64_t)*b_max);
-    nCkSB = (int*)malloc(sizeof(int)*b_max);
-    for (b = 0;b < b_max;b++) {
-        nCkSB[b] = count_set_bits(b + 1); // 4^(count_set_bits(b+1))
-        i = 1ULL << (2 * nCkSB[b]);
-        CkSB[b] = (uint64_t*)malloc(sizeof(uint64_t)*i);
-        memset(CkSB[b], 0, sizeof(uint64_t)*i);
-    }
-
-    // Calculate CkSB
-    // iterate over all elements
-    for (s = 0; s < s_max; s++) {
-        // for each combination add the value to the proper place
-        for (b = 0;b < b_max;b++) {
-            idx = bindex(s, b + 1, nCkSB[b]);
-            CkSB[b][idx] += counts[s];
-        }
-        CkS0 += counts[s];
-    }
-    // calculate rho
-    for (s = 0;s < s_max;s++) {
-        if (counts[s] > 0)
-            rho[s] = (double)counts[s];
-        else
-            rho[s] = 1.0 / (double)CkS0;
-        /* the only difference between this and karlin signatures */
-        N123 = (double)CkSB[0b1110 - 1][bindex(s, 0b1110, nCkSB[0b1110 - 1])];
-        N234 = (double)CkSB[0b0111 - 1][bindex(s, 0b0111, nCkSB[0b0111 - 1])];
-        N23 = (double)CkSB[0b0110 - 1][bindex(s, 0b0110, nCkSB[0b0110 - 1])];
-        E = N123*N234 / N23;
-        var = E*(N23 - N123)*(N23 - N234) / (N23*N23);
-
-        rho[s] = (rho[s] - E) / (sqrt(var));
-    }
-    // free CkSB and nCkSB - we do not need them anymore
-    if (CkSB) {
-        for (b = 0;b < b_max;b++) {
-            if (CkSB[b])
-                free(CkSB[b]);
-        }
-        free(CkSB);
-    }
-    if (nCkSB)
-        free(nCkSB);
-    return rho;
-}
 size_t alignmatch(nucseq* toalign, nucseq* src, int64_t offset)
 {
     size_t i_ = 0;
@@ -2000,6 +1307,104 @@ size_t appendtoseq(nucseq* target, nucseq* right) {
     }
 
     return newlen;
+}
+
+/* MinHashing of sequences */
+
+void nucseq_oligocount_to_minhashLht(nucseq* sequence, ht64_t* target, int k, hashdesc_t* hash, size_t mod) {
+    size_t i;
+    size_t maxi;
+    size_t stk;
+    uint64_t hkey;
+    char* tbs;
+    char* tbsrc;
+    int nf;
+    size_t ignorecount;
+    size_t keylen;
+    size_t numel;
+    stk = (size_t)k;
+    maxi = sequence->len - stk + 1;
+    tbs = NULL;
+    tbsrc = NULL;
+    ignorecount = 0;
+    numel = 0;
+    keylen = 0;
+    for (i = 0;i < stk;i++) {
+        if (sequence->seq[i] == nucN)
+            ignorecount = i + 1;
+    }
+    for (i = 0;i < maxi;i++) {
+        if (sequence->seq[i + stk - 1] == nucN) {
+            ignorecount = k;
+        }
+        if (ignorecount > 0)
+            ignorecount--;
+        else {
+            keylen = twobitseq(sequence->seq + i, stk, &tbs, keylen);
+            numel = twobitrcseq(sequence->seq + i, stk, &tbsrc, numel);
+            if (memcmp(tbs, tbsrc, keylen) < 0) {
+                hkey = hash_index(tbs, keylen, hash);
+                if (hkey%mod == 0)
+                    ht64_set(target, tbs, keylen, hkey, &nf);
+            }
+            else {
+                hkey = hash_index(tbsrc, keylen, hash);
+                if (hkey%mod == 0)
+                    ht64_set(target, tbsrc, keylen, hkey, &nf);
+            }
+        }
+    }
+    free(tbs);
+    free(tbsrc);
+}
+ht64_t* kmerhash_minhashLtable(nucseq** allsequences, size_t nseqs, int k, hashdesc_t* hash, size_t mod) {
+    uint64_t nbins;
+    ht64_t* result;
+    size_t i;
+    nbins = 0;
+    for (i = 0;i < nseqs;i++) {
+        nbins += allsequences[i]->len;
+    }
+    if (nbins > 20000000)nbins = 20000000;
+    result = ht64_alloc_size(nbins);
+    for (i = 0;i < nseqs;i++) {
+        nucseq_oligocount_to_minhashLht(allsequences[i], result, k, hash, mod);
+    }
+    return result;
+}
+int64_t* minhash_Msig(nucseq** allsequences, size_t nseqs, int k, size_t siglen, size_t genomesize_est) {
+    ht64_t* ht_seq;
+    hashdesc_t* hash;
+    int64_t* valuetable;
+    int64_t* valuetable2;
+    size_t nkmers;
+    size_t i, j;
+    size_t mod;
+    hash = hashdesc_alloc();
+    mod = (genomesize_est / siglen) / 3 * 2;
+    hashdesc_init_fingerprint64(hash);
+    ht_seq = kmerhash_minhashLtable(allsequences, nseqs, k, hash, mod);
+    nkmers = ht64_astables(ht_seq, NULL, NULL, &valuetable);
+    vec_sorti64(valuetable, nkmers);
+    valuetable2 = (int64_t*)malloc(sizeof(int64_t)*(siglen + 1));
+    j = 0;
+    i = 0;
+    valuetable2[0] = nkmers;
+    while (i < nkmers && j < siglen) {
+        valuetable2[j + 1] = valuetable[i];
+        j++;
+        i++;
+    }
+    free(valuetable);
+    if (siglen > j) {
+        for (i = j;i < siglen;i++)
+            valuetable2[i] = 0x7FFFFFFFFFFFFFFF;
+        /* by using this number, we guarantee that these values will have the lowest priority*/
+    }
+    /*cleanup*/
+    ht64_free(ht_seq);
+    hashdesc_free(hash);
+    return valuetable2;
 }
 
 /* ******************

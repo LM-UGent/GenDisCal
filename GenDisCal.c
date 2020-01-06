@@ -1,9 +1,44 @@
-// GLOBAL DEFINES
-#define VERSION_NAME    "GenDisCal v1.0"
+/*
+MIT License
+
+Copyright (c) 2019 Gleb Goussarov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
+/* GLOBAL DEFINES */
+#define VERSION_NAME    "GenDisCal v1.1.0"
+#define CHANGES \
+"The program has been fully reworked internally, with hopefully not consequences on normal functionality.\n" \
+"In addition, the following options have been added:\n" \
+"--license         displays license\n" \
+"--version         displays current version\n" \
+"--changes         displays changes since the last minor update\n" \
+"-c / --canonical  shorten signatures to only include canonical k-mers\n" \
+"-a / --filealias  add aliasias to be displayed in place of filenames in the output \n" \
+"-e / --exclude    exclude samples based on taxonomy \n" \
+"-i / --include    include samples based on taxonomy \n" \
+"-u / --clustering perform clustering based on the distance matrix"
 #ifdef _DEBUG
 /*#define NOOPENMP*/
 #endif
-// INCLUDES
+/* INCLUDES */
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -22,10 +57,11 @@
 #include "nucseq.h"
 #include "vecops.h"
 #include "argparser.h"
-#include "GenDisCal_distances.h"
+#include "genosig.h"
 #include "textparsing.h"
-#include "taxextractor.h"
+#include "taxonomy.h"
 #include "datatable.h"
+#include "suffixtree.h"
 
 int autothreads() {
     int mthreads;
@@ -49,9 +85,11 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
     args_t* result;
     
     result = args_alloc();
-
-    args_add(result, "basis", 'b', "str,int");
-    args_add(result, "method", 'm', "str,float");
+    args_add(result, "license", 0, "");
+    args_add(result, "version", 0, "");
+    args_add(result, "changes", 0, "");
+    args_add(result, "basis", 'b', "str,var");
+    args_add(result, "method", 'm', "str,var");
     args_add(result, "preset", 'p', "str");
     args_add(result, "filelist", 'f', "str");
     args_add(result, "search", 's', "str");
@@ -66,18 +104,28 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
     args_add(result, "only", 'y', "str");
     args_add(result, "filtershort", 'l', "int");
     args_add(result, "keepsigs", 'k',"str");
+    args_add(result, "canoncial", 'c', "");
+    args_add(result, "filealias", 'a', "str");
+    args_add(result, "exclude", 'e', "...");
+    args_add(result, "include", 'i', "...");
+    args_add(result, "clustering", 'u', "str");
+    args_add(result, "z", 'z', "");
 #ifndef NOOPENMP
     args_add(result, "nprocs", 'n', "int");
 #endif
-
+    args_add_help(result, "license", "LICENSE", "Prints the license(s) associated with GenDisCal.\n", "Print license(s)");
+    args_add_help(result, "version", "LICENSE", "Prints the license(s) associated with GenDisCal.\n", "Print license(s)");
+    args_add_help(result, "changes", "LICENSE", "Prints the license(s) associated with GenDisCal.\n", "Print license(s)");
     args_add_help(result, "basis", "SIGNATURE BASIS",
         "Signature bases are used to transform a genome into a vector of numbers. "
         "Available signatures are as follows:\n"
-        "   len        -- use genome length as a signature\n"
-        "   GC         -- use GC content as a signature\n"
-        "   freq <k>   -- use frequencies of <k>-mers as a signature\n"
-        "   karl <k>   -- use karlin signatures of <k>-mers\n"
-        "   exp <k>    -- use <k>-mer bias with regards to monomer composition\n"
+        "   len         -- use genome length as a signature\n"
+        "   GC          -- use GC content as a signature\n"
+        "   freq <k>    -- use frequencies of <k>-mers as a signature\n"
+        "   karl <k>    -- use karlin signatures of <k>-mers\n"
+        "   exp <k>     -- use <k>-mer bias with regards to monomer composition\n"
+        /*"   gene <name> -- use nucleotide identity for the gene stored in the file <name>\n"
+        "                  in addition, <name> may be \"16S\".\n"
         /*"   bias <k>   -- use <k>-mer bias with regards to <k-1>-mer composition\n"*/
         "For single-stranded DNA and RNA, alternative versions of these functions are provided, "
         "beginning with 's_', as follows:\n"
@@ -109,22 +157,22 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "    TETRA is suitable to conclude whether two genomes belong to the same\n"
         "    species.\n"
         "    The ambiguity region for the results is [0.0005-0.005]\n"
-        " > approxANI (-b bias 4 -m corr)\n"
+        " > approxANI (no equivalent)\n"
         "    approxANI is a minhash-based approximation of Average Nucleotide\n"
         "    Identity (ANI). This method is similar to the one used by the \n"
-        "    Mash software (Ondov et al., Gen. biol., 2016) "
+        "    Mash software (Ondov et al., Gen. biol., 2016)\n"
         "    The ambiguity region for species is [0.04-0.06]\n"
- /*       " > program:<file> (no equivalent)\n"
-        "    This will run an external program and format the result based on the remaining arguments."
-        "    <file> should be formatted as follows:\n"
-        "      line 1 | command line to summarize sequences (leave blank to use raw sequences)\n"
-        "      line 2 | command line to compare summaries (or raw sequences)\n"
-        "      line 3 | command line to transform the results into a tab-separated table\n"
-        "    Some examples are provided, but need to be adapted manually to work:\n"
-        "      <install path>/16S.eem\n"
-        "      <install path>/MinHash.eem\n"
-        "      <install path>/ANIb.eem\n"
-        "    The software required to run some of these examples needs to be installed separately.\n"*/,
+        " > combinedSpecies (no equivalent)\n"
+        "    combinedSpecies produces a probability that two genomes belong to\n"
+        "    the same bacterial species, based on multiple metrics\n"
+        /*" > 16S (-b gene 16S -m alignseqs)"
+        "    Nucleotide identity of aligned 16S rRNA genes is usually considered to\n"
+        "    be a good indication of two bacterial genomes belonging to the same\n"
+        "    species.\n"
+        "    The typically used thresholds are 0.0135 and 0.03, with values below\n"
+        "    the threshold belonging to the same species. We note that in our tests,\n"
+        "    2.5%% of <same genus> comparisons fell below 0.0135, and 18.6%% fell below\n"
+        "    0.03.\n"*/,
         "use a special preset of options (replaces -b and -m)");
     args_add_help(result, "filelist", "FILE LIST",
         VERSION_NAME " accepts genome files as free arguments, but when a large number of genomes "
@@ -146,8 +194,13 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "matches the expected taxonomical relation. The first argument should be the path to the "
         "taxonomy file, while the second should be the taxonomy format. Possible formats are:\n"
         "  PCOF_S  -- filename,PhylumClassOrderFamily_Genus_species_etc (default)\n"
-        /*"  semicol -- filename;Phylum;Class;Order;Family;Genus;species;etc\n"*/
-        /*"  pipe    -- filename | Phylum | Class | Order | Family | Genus | Species | etc\n"*/,
+        "  GTDB    -- filename[tab]d__Domain;p__Phylum;c__Class;...\n"
+        "  NCBI    -- filename,NCBI_taxid\n"
+        "When using the NCBI format, please ensure that nodes.dmp.txt is present in the folder where "
+        "the command is run.\n"
+        "If the the supplied filename ends with '.ttd', it is assumed to be a pre-computed taxonomy "
+        "file, and the second argument does not need to be specified. Otherwise, such a file will be "
+        "generated by this program.\n",
         "taxonomy file");
     args_add_help(result, "ordered", "FORCE ORDERED OUTPUT",
         "If this option is present, the output will be forcefully ordered. This has no effect "
@@ -159,13 +212,20 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "If this option is present, the output will be a multi-column histogram with the specified "
         "bin width (default: 0.001) instead of a list of comparisons. Rows represent bins, whereas "
         "columns represent the taxonomic relation based on the --taxonomy option.\n"
-        "The output format is a always a comma-separated file.\n",
-        "enable histogram output (overrides --distancematrix)");
+        "The output format is a always a comma-separated file.\n"
+        "This option overrides --distancematrix and --clustering\n",
+        "enable histogram output");
     args_add_help(result, "distancematrix", "DISTANCE MATRIX OUTPUT",
         "If this option is present, the output will be a distance matrix instead of a list of "
         "comparisons.\n"
-        "The output format is a always a comma-separated file.\n",
+        "The output format is a always a comma-separated file.\n"
+        "This option is required for --clustering\n",
         "enable distance matrix output");
+    args_add_help(result, "clustering", "CLUSTERING OUTPUT",
+        "If this option is present, a tree will be produced based on the specified method.\n"
+        "The output format is a newick tree.\n"
+        "available methods: ward (default)\n",
+        "enable clustering output");
     args_add_help(result, "sort_by_distance", "SORT BY DISTANCE",
         "Sort output table according to distance. Automatically sets the --ordered flag when used. "
         "Ignored when --distancematrix or --histogram is specified (default: no)\n",
@@ -188,7 +248,7 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "  Same_Family\n"
         "  Same_Genus\n"
         "  Same_Species\n"
-        "  Same_Subspecies\n"
+        "  Same_Subgroup\n"
         "  Replicate\n",
         "Only report values with a given taxonomic relation");
     args_add_help(result, "filtershort", "FILTER SHORT SEQUENCES",
@@ -203,6 +263,31 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "  continue : perform comparisons after creating signature files (default)\n"
         "  stop     : abort the program creating signature files\n",
         "generate signature files");
+    args_add_help(result, "canoncial", "USE CANONICAL SIGNATURES",
+        "If this option is present, elements of k-mer-based signatures which to the reverse "
+        "complement of 'smaller' k-mers signatures will be removed. This can accelerate calculations.\n"
+        "We consider that k-mer can be compared in the same way as numbers where each letter "
+        "represents a digit, with A<C<G<T. For example, under this notation AAAG < CTTT, and hence "
+        "only the value associated with AAAG will be kept.\n",
+        "Simplify signatures to keep canoncial elements only");
+    args_add_help(result, "filealias", "USE FILE ALIASES IN OUTPUT",
+        "If this option is present, elements in the output will be renamed according to taxonomy "
+        "or aliases contained in the alias file supplied with this option.\n",
+        "Change the name of sequences in the output");
+    args_add_help(result, "exclude", "EXCLUDE SPECIFIC TAXONOMIC NAMES",
+        "All names following this option will not be included for comparison. Any genome whose "
+        "taxonomy contains any of these names will therefore be excluded. This remains true "
+        "even if these sequences match one of the names specified with -i/--include.\n",
+        "Exclude taxids");
+    args_add_help(result, "include", "INCLUDE SPECIFIC TAXONOMIC NAMES",
+        "When this flag is present, only the sequences which contains at least one of the names "
+        "specified after this option will be included. Sequences included this way may still "
+        "be excluded using -e/--exclude.\n",
+        "Include taxids");
+    args_add_help(result, "z", "END OF OPTION",
+        "Use this flag to terminate arguments with unspecified counts. All names specified after "
+        "this flag (but before the next flag/option) will be considered as query file names.\n",
+        "end of option");
 #ifndef NOOPENMP
     args_add_help(result, "nprocs", "NUMBER OF PROCESSOR CORES TO USE",
         "This option defines the number of cores to use. By default, the number of cores "
@@ -246,6 +331,7 @@ char** GenDisCal_get_file_list(args_t* args, size_t* nfiles) {
                     free(line);
                 }
             }
+            PFclose(f);
         }
     }
     nl = nf;
@@ -300,103 +386,50 @@ typedef struct signature_t {
 #define LINEAGE_STRAIN      7
 #define LINEAGE_UNIQUEID    8
 
-signature_t* signature_alloc() {
-    signature_t* result;
-    result = calloc(1, sizeof(signature_t));
-    return result;
-}
-void signature_free(signature_t* target) {
-    size_t i;
-    signature_t** demux;
-    if (target) {
-        if (target->multicount > 0) {
-            demux = (signature_t**)(target->data);
-            for (i = 0;i < target->multicount;i++) {
-                signature_free(demux[i]);
-            }
-            target->multicount = 0;
-        }
-        if (target->data)free(target->data);
-        if (target->fname && target->freefname) free(target->fname);
-        target->data = NULL;
-        target->fname = NULL;
-        target->len = 0;
-        free(target);
-    }
-}
-int signature_taxsimlevel(signature_t* A, signature_t* B) {
-    int i;
-    i = 0;
-    if (!A || !B || A->lineage[i] == 0 || B->lineage[i] == 0) return -1;
-    while (i < 9 && A->lineage[i] == B->lineage[i] && A->lineage[i] != 0)
-        i++;
-    return i;
-}
-signature_t* signature_multiplex(signature_t** signatures, size_t count) {
-    signature_t* res;
-    res = signature_alloc();
-    res->data = signatures;
-    res->multicount = count;
-    return res;
-}
-signature_t** signature_demultiplex(signature_t* source) {
-    signature_t** res;
-    res = (signature_t**)(source->data);
-    source->data = NULL;
-    source->multicount = 0;
-    source->len = 0;
-    return res;
-}
-int signature_is_multiplexed(signature_t* target) {
-    return target->multicount != 0;
-}
-size_t signature_get_multiplex_amount(signature_t* target) {
-    return target->multicount;
-}
-int set_basis_function(args_t* args, basis_function* bf, size_t* sig_len, size_t* kmer_len) {
+int set_basis_function(args_t* args, genosig_bf* bf, size_t* sig_len, size_t* kmer_len) {
     size_t maxi, i;
     size_t kmerlen;
     int nocalc;
     char* basisstr;
     char* presetstr;
-    char* possible_bases[] = { "GC","freq","karl","exp","s_freq","s_karl","s_exp","len","SSU" };
-    basis_function bf_list[] = { freqs,freqs,karsn,markz2,freqn,karln,markz1,gensz,SSUseq };
+    char* possible_bases[] = { "GC","freq","karl","karlL","exp","mmzinf","len","minhash","sequence","findgene","filename","none" };
+    genosig_bf bf_list[] = { genosig_GC,genosig_kmerfreq,genosig_karlinsig,genosig_karlinsigL,genosig_mmz,genosig_mmz_inf, genosig_length,genosig_minhash,NULL,NULL,genosig_keepfilenameonly,genosig_keepfilenameonly };
     nocalc = 0;
     presetstr = args_getstr(args, "preset", 0, NULL);
     if (presetstr) {
+        if (strcmp(presetstr, "GC") == 0) {
+            *bf = genosig_GC;
+            kmerlen = 1;
+            *sig_len = 1;
+        }
         if (strcmp(presetstr, "TETRA") == 0) {
-            *bf = TETRA;
+            *bf = genosig_mmz;
             kmerlen = 4;
             *sig_len = (1LL << (4 * 2));
         }
         else if (strcmp(presetstr, "PaSiT4") == 0) {
-            *bf = karsn;
+            *bf = genosig_karlinsig;
             kmerlen = 4;
             *sig_len = (1LL << (4 * 2));
         }
         else if (strcmp(presetstr, "PaSiT6") == 0) {
-            *bf = karsn;
+            *bf = genosig_karlinsig;
             kmerlen = 6;
             *sig_len = (1LL << (6 * 2));
         }
         else if (strcmp(presetstr, "approxANI") == 0) {
-            *bf = minhashsig;
+            *bf = genosig_minhash;
             kmerlen = 21;
-            *sig_len = SIGLEN_MINHASH;
-        }
-        else if (strcmp(presetstr, "combinedSpecies") == 0) {
-            *bf = combinedsig;
-            kmerlen = 21;
-            *sig_len = SIGLEN_MINHASH;
-        }
-        else {
+            *sig_len = 3000;
+        }else {
             args_report_warning(NULL, "Unknown preset <%s>, using default basis: <karl 4>\n", presetstr);
             kmerlen = 4;
-            *bf = karsn;
+            *bf = genosig_karlinsig;
         }
     }
     else {
         basisstr = args_getstr(args, "basis", 0, "karl");
+        if (basisstr[0] == 's' && basisstr[1] == '_') basisstr += 2;
         maxi = sizeof(possible_bases) / sizeof(char*);
         for (i = 0;i < maxi;i++) {
             if (strcmp(possible_bases[i], basisstr) == 0)break;
@@ -405,341 +438,273 @@ int set_basis_function(args_t* args, basis_function* bf, size_t* sig_len, size_t
             if (beginswith("karl", basisstr)) {
                 if (basisstr[4] == '*') {
                     kmerlen = atoll(basisstr + 5);
-                    *bf = karsn;
+                    *bf = genosig_karlinsig;
                     args_report_warning(NULL, "'-b karl*%d' is deprecated, use '-b karl %d' instead\n", (int)kmerlen, (int)kmerlen);
                 }
                 else {
                     kmerlen = atoll(basisstr + 4);
-                    *bf = karln;
+                    *bf = genosig_karlinsig;
                     args_report_warning(NULL, "'-b karl%d' is deprecated, use '-b s_karl %d' instead\n",(int)kmerlen, (int)kmerlen);
                 }
             }
             else if (beginswith("freq", basisstr)) {
                 if(basisstr[4] == '*') {
                     kmerlen = atoll(basisstr + 5);
-                    *bf = freqs;
+                    *bf = genosig_kmerfreq;
                     args_report_warning(NULL, "'-b freq*%d' is deprecated, use '-b freq %d' instead\n", (int)kmerlen, (int)kmerlen);
                 }
                 else {
                     kmerlen = atoll(basisstr + 4);
-                    *bf = freqn;
+                    *bf = genosig_kmerfreq;
                     args_report_warning(NULL, "'-b freq%d' is deprecated, use '-b s_freq %d' instead\n", (int)kmerlen, (int)kmerlen);
                 }
             }
             else if (beginswith("markz", basisstr)) {
                 if (basisstr[5] == '*') {
                     kmerlen = atoll(basisstr + 6);
-                    *bf = markz2;
+                    *bf = genosig_mmz;
                     args_report_warning(NULL, "'-b markz*%d' is deprecated, use '-b exp %d' instead\n", (int)kmerlen, (int)kmerlen);
                 }
                 else {
                     kmerlen = atoll(basisstr + 5);
-                    *bf = markz1;
+                    *bf = genosig_mmz;
                     args_report_warning(NULL, "'-b markz%d' is deprecated, use '-b s_exp %d' instead\n", (int)kmerlen, (int)kmerlen);
                 }
             }
             else if (strcmp("TETRA", basisstr) == 0) {
-                *bf = TETRA;
+                *bf = genosig_mmz;
                 kmerlen = 4;
                 args_report_warning(NULL, "'-b TETRA' is deprecated, use '-p TETRA' instead\n");
             }
             else {
                 args_report_warning(NULL, "Unknown basis <%s>, defaulting to <karl>\n", basisstr);
-                *bf = karsn;
+                *bf = genosig_karlinsig;
                 basisstr = "karl";
             }
         }
         else {
             *bf = bf_list[i];
+            if (*bf == genosig_minhash) {
+                kmerlen = 21;
+                *sig_len = 3000;
+            }
+            else {
+                kmerlen = 4;
+            }
         }
-        if (strcmp(basisstr, "GC") == 0)
-            kmerlen = 0;
-        else if (strcmp(basisstr, "len") == 0)
-            kmerlen = 0;
-        else
-            kmerlen = args_getint(args, "basis", 0, 4);
+        if (strcmp(basisstr, "GC") == 0) {
+            args_report_info(NULL, "Using GC content as signatures\n");
+        }
+        else if (strcmp(basisstr, "len") == 0) {
+            args_report_info(NULL, "Using genome lengths as signatures\n");
+        }
+        else {
+            kmerlen = atoll(args_getstr(args, "basis", 1, "4"));
+            if (kmerlen == 0) kmerlen = 4;
+            args_report_info(NULL, "Calculating %s signatures\n", basisstr);
+            args_report_info(NULL, "k-mer length set to %d (may not be meaningful)\n", (int)kmerlen);
+        }
         if (kmerlen < 0) kmerlen = 0;
-        *sig_len = (1LL << (2 * kmerlen));
-        args_report_info(NULL, "Calculating length-%d %s signatures\n", (int)kmerlen, basisstr);
     }
     *kmer_len = kmerlen;
     return nocalc;
 }
-int set_method_function(args_t* args, method_function* mf, double* metharg) {
+int set_method_function(args_t* args, genosig_df* mf, any_t* metharg) {
     char* methstr;
     char* presetstr;
-    double tmp;
+    any_t resarg;
     presetstr = args_getstr(args, "preset", 0, NULL);
+    resarg.d = 0.02;
     if (presetstr) {
         if (strcmp(presetstr, "TETRA") == 0) {
-            *mf = corr;
-            *metharg = 0.0;
+            *mf = genodist_pearscorr;
+            resarg.d = 0.0;
         }
         else if (strcmp(presetstr, "PaSiT4") == 0) {
-            *mf = SVC;
-            *metharg = 0.02;
+            *mf = genodist_satman;
+            resarg.d = 0.02;
         }
         else if (strcmp(presetstr, "PaSiT6") == 0) {
-            *mf = SVC;
-            *metharg = 0.02;
+            *mf = genodist_satman;
+            resarg.d = 0.02;
         }
         else if (strcmp(presetstr, "approxANI") == 0) {
-            *mf = approxANI;
-            *metharg = 21.0;
-        }
-        else if (strcmp(presetstr, "combinedSpecies") == 0) {
-            *mf = combinedSpecies;
-            *metharg = 21.0;
+            *mf = genodist_approxANI;
+            resarg.d = 21.0;
         }
         else {
             args_report_warning(NULL, "Unknown preset <%s>, using default method: <PaSiT 0.02>\n", presetstr);
-            *mf = SVC;
-            *metharg = 0.02;
+            *mf = genodist_satman;
+            resarg.d = 0.02;
         }
     }
     else {
         methstr = args_getstr(args, "method", 0, "SVC");
         if (strcmp(methstr, "AMD") == 0 || strcmp(methstr, "manhattan") == 0) {
-            *mf = AMD;
-            *metharg = 0.0;
+            *mf = genodist_manhattan;
+            resarg.d = 0.0;
         }
         else if (strcmp(methstr, "ED") == 0 || strcmp(methstr, "euclid") == 0) {
-            *mf = ED;
-            *metharg = 0.0;
+            *mf = genodist_euclidian;
+            resarg.d = 0.0;
         }
-        else if (strcmp(methstr, "SVC") == 0 || strcmp(methstr, "PaSiT") == 0) {
-            *mf = SVC;
-            *metharg = args_getdouble(args, "method", 0, 0.02);
+        else if (strcmp(methstr, "SVC") == 0 || strcmp(methstr, "PaSiT") == 0 || strcmp(methstr, "satman") == 0) {
+            *mf = genodist_satman;
+            resarg.d = args_getdoublefromstr(args, "method", 1, 0.02);
+        }
+        else if (strcmp(methstr, "PaSiTL") == 0) {
+            *mf = genodist_PaSiTL;
+            resarg.d = args_getdoublefromstr(args, "method", 1, 0.02);
+        }
+        else if (strcmp(methstr, "sateucl") == 0 ) {
+            *mf = genodist_sateucl;
+            resarg.d = args_getdoublefromstr(args, "method", 1, 0.02);
         }
         else if (strcmp(methstr, "hamming") == 0) {
-            *mf = SVC;
-            *metharg = 0.0;
+            *mf = genodist_satman;
+            resarg.d = 0.0;
         }
         else if (strcmp(methstr, "corr") == 0 || strcmp(methstr, "pearson") == 0) {
-            *mf = corr;
-            *metharg = 0.0;
+            *mf = genodist_pearscorr;
+            resarg.d = 0.0;
+        }
+        else if (strcmp(methstr, "rankcorr") == 0 || strcmp(methstr, "spearman") == 0) {
+            *mf = genodist_rankcorr;
+            resarg.d = 0.0;
         }
         else if (strcmp(methstr, "reldist") == 0) {
-            *mf = reldist;
-            *metharg = 0.0;
+            *mf = genodist_manhattan;
+            resarg.d = 0.0;
         }
         else if (beginswith("SVC", methstr)) {
-            *metharg = atof(methstr + 3);
-            *mf = SVC;
+            resarg.d = atof(methstr + 3);
+            *mf = genodist_satman;
             args_report_warning(NULL, "'-m SVC<f>' is deprecated, use '-m SVC <f>' instead\n");
         }
-        else if (beginswith("localalign", methstr)) {
-            *metharg = 1;
-            *mf = localalign;
+        else if (beginswith("alignseqs", methstr)) {
+            resarg.d = 1;
+            *mf = genodist_ANI;
+        }
+        else if (beginswith("ANIb", methstr)) {
+            resarg.str = args_getstr(args,"method",1,NULL);
+            if (resarg.str == NULL) args_report_error(NULL, "Please specify the path to blast to use ANIb\n");
+            *mf = genodist_externANIb;
+        }
+        else if (strcmp(methstr, "approxANI") == 0) {
+            *mf = genodist_approxANI;
+            resarg.d = args_getdoublefromstr(args, "method", 1, 0.02);
+            resarg.d = 21.0;
         }
         else {
-            tmp = 0.0;
-            *metharg = args_getdouble(args, "method", 0, tmp);
-            if (*metharg != tmp) {
-                args_report_warning(NULL, "Unknown method <%s %f>, using default: <PaSiT 0.02>\n", presetstr);
+            resarg.str = args_getstr(args, "method", 1, NULL);
+            if (resarg.str != NULL) {
+                args_report_warning(NULL, "Unknown method <%s %s>, using default: <PaSiT 0.02>\n", presetstr);
             }
             else {
                 args_report_warning(NULL, "Unknown method <%s>, using default: <PaSiT 0.02>\n", presetstr);
             }
-            *mf = SVC;
-            *metharg = 0.02;
+            *mf = genodist_satman;
         }
     }
+    *metharg = resarg;
     return 0;
 }
 
-void read_sigmeta_from_file(PF_t* source, signature_t* sig) {
-    int64_t fnamelen;
-    /* it is assumed that the file's endianness matches that of the OS */
-    fnamelen = PFgetint64(source);
-    if (fnamelen > 0) {
-        sig->fname = malloc(sizeof(char)*(fnamelen + 1));
-        sig->fname[fnamelen] = 0;
-        sig->freefname = 1;
-        PFread(sig->fname, sizeof(char), fnamelen, source);
-    }
-}
-signature_t* readsig_fromfile(PF_t* source) {
-    signature_t* res;
-    double* data;
-    int32_t type;
-    int32_t datatype;
-    uint64_t n;
-    /* it is assumed that the file's endianness matches that of the OS */
-    PFread(&type, sizeof(int32_t), 1, source);
-    PFread(&datatype, sizeof(int32_t), 1, source);
-    PFread(&n, sizeof(uint64_t), 1, source);
-    if (datatype == 2) {
-        /* rem: datatype == 2 is bytes */
-        data = malloc(n);
-        PFread(data, 1, n, source);
-    }
-    else {
-        data = malloc(sizeof(double)*n);
-        PFread(data, sizeof(double), n, source);
-    }
-    res = signature_alloc();
-    res->data = data;
-    res->len = n;
-    res->datatype = datatype;
-    read_sigmeta_from_file(source, res);
-    return res;
-}
-signature_t* read_sig_file(char* filename) {
-    signature_t* res;
-    PF_t* f;
-    PFopen(&f, filename, "rb");
-    if (f) {
-        res = readsig_fromfile(f);
-        if (!res->fname)
-            res->fname = os_rmdirname(filename);
-        PFclose(f);
-    }
-    else
-        res = signature_alloc();
-    return res;
-}
-signature_t* read_multisig_file_as_multiplexed(char* filename, int64_t maxcount) {
-    signature_t* res;
-    signature_t** resarray;
-    PF_t* f;
-    int64_t cursig;
-    int64_t fcount;
-    res = NULL;
-    PFopen(&f, filename, "rb");
-    if (f) {
-        fcount = (size_t)PFgetint64(f);
-        resarray = calloc((size_t)fcount, sizeof(signature_t*));
-        if (fcount > maxcount)fcount = maxcount;
-        for (cursig = 0; cursig < fcount;cursig++) {
-            res = readsig_fromfile(f);
-            resarray[cursig] = res;
-        }
-        res = signature_multiplex(resarray, fcount);
-        PFclose(f);
-    }
-    return res;
-}
-signature_t* get_signature_from_fasta(char* filename, basis_function basis, int nlen, size_t minseqlen) {
-    PF_t* f;
-    nucseq** nsa;
-    nucseq tmpseq = EMPTYSEQ;
-    nucseq spacerseq = EMPTYSEQ;
-    signature_t* sg;
-    size_t outcount;
-    size_t i;
-    PFopen(&f, filename, "r");
-    if (!f) {
-        args_report_info(NULL, "Failed to read: %s\n", filename);
-        return NULL;
-    }
-    nsa = nucseq_array_from_fasta(f, &outcount, 1, minseqlen);
-    nucseq_from_string(&spacerseq, "N");
-
-    sg = signature_alloc();
-    sg->fname = os_rmdirname(filename);
-    clear_nucseq(&tmpseq);
-    for (i = 0;i < outcount;i++) {
-        appendtoseq(&tmpseq, &spacerseq);
-        appendtoseq(&tmpseq, nsa[i]);
-    }
-    sg->len = basis(&(tmpseq), nlen, (double**)(&(sg->data)));
-    sg->datatype = 2; /* starting from version 0.2, all computed signatures are to be considered as binary data */
-    clear_nucseq(&tmpseq);
-    clear_nucseq(&spacerseq);
-    for (i = 0;i<outcount;i++) {
-        clear_nucseq(nsa[i]);
-        free(nsa[i]);
-    }
-    PFclose(f);
-    free(nsa);
-    if (!sg->data) {
-        signature_free(sg);
-        sg = NULL;
-    }
-    return sg;
-}
-signature_t* get_signatures(char* filename, basis_function basis, int nlen, size_t minseqlen) {
-    if (basis == SSUseq) {
-        if (endswith(".sig", filename) || endswith(".sdb", filename)) {
-            args_report_warning(NULL, "SSUs cannot be stored as signatures. Skipping file <%s>\n", filename);
-            return NULL;
-        }
-        else {
-            return get_signature_from_fasta(filename, basis, nlen, minseqlen);
-        }
-    }
-    else {
-        if (endswith(".sig", filename))
-            return read_sig_file(filename);
-        else if (endswith(".sdb", filename)) {
-            return read_multisig_file_as_multiplexed(filename, 100000000);
-        }
-        else
-            return get_signature_from_fasta(filename, basis, nlen, minseqlen);
-
-    }
-}
-
-void write_signature(PF_t* target, signature_t* source) {
-    int32_t type;
-    int32_t datatype; /* DATATYPE: 1 - double, 2 - byte */
-    uint64_t fnamelen;
-    datatype = source->datatype;
-    type = 1;
-    /* it is assumed that the file's endianness matches that of the OS */
-    PFwrite(&type, sizeof(int32_t), 1, target);
-    PFwrite(&datatype, sizeof(int32_t), 1, target);
-    PFwrite(&(source->len), sizeof(uint64_t), 1, target);
-    if (datatype <= 1)
-        PFwrite(source->data, sizeof(double), source->len, target);
-    else if (datatype == 2)
-        PFwrite(source->data, 1, source->len, target);
-    if (source->fname) {
-        /* inserted a the end to maintain portability */
-        fnamelen = strlen(source->fname);
-        PFputint64(target,fnamelen);
-        PFwrite(source->fname, 1, strlen(source->fname), target);
-    }
-}
-void write_sigfile(const char* basename, signature_t* source) {
+void write_sigfile(const char* basename, genosig_t* source) {
     PF_t* f;
     char* newname;
     size_t baselen;
-    baselen = strlen(basename);
-    newname = (char*) malloc(baselen + 5);
-    memcpy(newname, basename, baselen);
-    newname[baselen] = '.';
-    newname[baselen + 1] = 's';
-    newname[baselen + 2] = 'i';
-    newname[baselen + 3] = 'g';
-    newname[baselen + 4] = '\0';
-    PFopen(&f, newname, "wb");
-    write_signature(f, source);
-    PFclose(f);
-}
-void write_multisig_file(const char* basename, signature_t** signatures, size_t nsigs) {
-    PF_t* f;
-    char* newname;
-    size_t baselen;
-    size_t n;
     baselen = strlen(basename);
     newname = (char*)malloc(baselen + 5);
     memcpy(newname, basename, baselen);
-    newname[baselen] = '.';
-    newname[baselen + 1] = 's';
-    newname[baselen + 2] = 'd';
-    newname[baselen + 3] = 'b';
-    newname[baselen + 4] = '\0';
+    memcpy(newname + baselen, ".sig", 5);
     PFopen(&f, newname, "wb");
-    PFputint64(f, (int64_t)nsigs);
-    for (n = 0;n < nsigs;n++) {
-        write_signature(f, signatures[n]);
-    }
+    genosig_savebin(source,f);
     PFclose(f);
 }
-signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t* numfiles, size_t* sig_len, int numthreads) {
-    basis_function bf;
+genosig_t* get_signatures(char* filename, genosig_bf basis, size_t nlen, size_t minseqlen, int nonredundant, int singlestrand, int keepgenome, genosig_t* refgenes, size_t winsize) {
+    genosig_t* result;
+    nucseq** nsarr;
+    size_t outcount;
+    PF_t* f;
+    if (endswith(".sig", filename) || endswith(".sdb", filename)) {
+        result = genosig_import(filename);
+    }
+    else {
+        result = NULL;
+        if (basis != genosig_keepfilenameonly) {
+            PFopen(&f, filename, "rb");
+            if (f) {
+                nsarr = nucseq_array_from_fasta(f, &outcount, 1, minseqlen);
+                result = genosig_fullgenome(nsarr, outcount, singlestrand, COPYLVL_INTEGRATE);
+                if (winsize > 0) result = genosig_makewindows(result, winsize, 1);
+                if (!genosig_info_name(result))
+                    result = genosig_autoname(result, filename);
+                if (refgenes) {
+                    result = genosig_findgenes(result, singlestrand, refgenes, 0);
+                }
+                if (basis != NULL) {
+                    result = basis(result, nlen);
+                    if (nonredundant) result = genosig_keepnonredundant(result, nlen);
+                }
+                else if (keepgenome) {
+                    result = genosig_suffixtrees(result);
+                }
+                if (!keepgenome) {
+                    genosig_cleargenomedata(result);
+                }
+                PFclose(f);
+            }
+        }
+        else {
+            result = genosig_genomefileref(filename);
+            result = genosig_keepfilenameonly(result,0);
+        }
+    }
+    return result;
+}
+
+genosig_t* get_gene_signature(char* gene, genosig_bf basis, size_t nlen, int nonredundant, int singlestrand, int keepgenome, size_t winsize) {
+    genosig_t* result;
+    nucseq** nsarr;
+
+    char* SSU = 
+        "TAATTGGAGAGTTTGATCCTGGCTCAGGATGAACGCTGGCGGCATGCCTAACACATGCAAGTCGAACGTATTGAAAGGTGCTTGCACCTGGACGAGTGGCGGACGGGTGAGTAACACGTGGGAACCTGCCCTT"
+        "AAGTGGGGGATAACATTTGGAAACAGATGCTAATACCGCATAAAACCGCATGGTTAAAGGCTGAAAGTGGCGTGAGCTATCGCTTTTGGATGGGCCCGCGTCGGATTAGCTAGTTGGTGAGGTAACGGCTCAC"
+        "CAAGGCGACGATCCGTAGCCGGTCTGAGAGGATGATCGGCCACACTGGGACTGAGACACGGCCCAGACTCCTACGGGAGGCAGCAGTGGGGAATATTGCACAATGGGCGCAAGCCTGATGCAGCAATGCCGCG"
+        "TGAGTGAAGAAGGCCTTCGGGTTGTAAAGCTCTTTTGTTGGGGAAGAAAGGTCGGCAGGTAACTGTTGTCGGCGTGACGGTACCCAACGAAAAAGCACCGGCTAACTACGTGCCAGCAGCCGCGGTAATACGT"
+        "AGGGTGCAAGCGTTATCCGGAATTATTGGGCGTAAAGCGAGCGCAGGCGGTTTTTTAAGTCTGATGTGAAAGCCCTCGGCTTAACCGGGGAAGTGCATTGGAAACTGGGAAACTTGAGTGCAGAAGAGGAGAG"
+        "TGGAATTCCATGTGTAGCGGTGAAATGCGTAGATATATGGAGGAACACCAGTGGCGAAGGCGGCTCTCTGGTCTGTAACTGACGCTGAGGCTCGAAAGCGTGGGGAGCAAACAGGATTAGATACCCTGGTAGT"
+        "CCACGCCGTAAACGATGAATGCTAGGTGTTGGGGGGTTTCCGCCCTTCAGTGCCGCAGCTAACGCATTAAGCATTCCGCCTGGGGAGTACGGCCGCAAGGTTGAAACTCAAAGGAATTGACGGGGGCCCGCAC"
+        "AAGCGGTGGAGCATGTGGTTTAATTCGAAGCAACGCGAAGAACCTTACCAGGTCTTGACATCTTTTGAACACCTTAGAGATAAGGTTTTCCCTTCGGGGACAAAATGACAGGTGCTGCATGGTTGTCGTCAGC"
+        "TCGTGTCGTGAGATGTTGGGTTAAGTCCCGCAACGAGCGCAACCCTTATCATTAGTTGCCAGCATTAAGTTGGGCACTCTAGTGAGACTGCCGGTGACAAACCGGAGGAAGGTGGGGATGACGTCAAATCATC"
+        "ATGGCCCTTATGACCTGGGCTACACACGTGCTACAATGGATGGTACAAAGAGTTGCGAGACCGCGAGGTCAAGCTAATCTCTTAAAGCCATTCTCAGTTCGGATTGTAGTCTGCAACTCGACTACATGAAGTC"
+        "GGAATCGCTAGTAATCGCGGATCAGCATGCCGCGGTGAATACGTTCCCGGGCCTTGTACACACCGCCCGTCACACCATGGGAGTTTGTAACACCCGAAGTCGGTGGCCTAACCTTAGGGAGGGAGCCGACTAA"
+        "GGTGGGACAGATGACTGGGGTGAAGTCGTAACAAGGTAGCCGTAGGGGAACCTGCGGCTGGATCACCTCCTTTCT";
+
+    nsarr = (nucseq**)malloc(sizeof(nucseq*));
+    nsarr[0] = (nucseq*) calloc(1, sizeof(nucseq));
+    if(strcmp(gene,"SSU")==0 || strcmp(gene,"16S")==0)
+        nucseq_from_string(nsarr[0], SSU);
+    result = genosig_fullgenome(nsarr, 1, singlestrand, COPYLVL_INTEGRATE);
+    if (winsize > 0) result = genosig_makewindows(result, winsize, 1);
+    if (basis != NULL) {
+        result = basis(result, nlen);
+        if (nonredundant) result = genosig_keepnonredundant(result, nlen);
+    }
+    else if (keepgenome) {
+        result = genosig_suffixtrees(result);
+    }
+    if (!keepgenome) {
+        genosig_cleargenomedata(result);
+    }
+    return result;
+}
+
+
+genosig_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t* numfiles, size_t* sig_len, int numthreads) {
+    /* This function is too massive and should probably be split into its consitituent parts */
+    genosig_bf bf;
     size_t i, j, k, n;
     size_t* p_n;
     size_t* i_p;
@@ -751,66 +716,179 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t*
     int nocalc;
     int nflag;
     size_t kmerlen;
-    taxextractor_t* te;
+    taxtree_t* taxtree;
     char* line;
     char* taxtype;
     char* badload;
     char* badtax;
+    char* tmpstr;
+    char* tmpstr2;
     PF_t* f;
-    char** taxstrings;
-    size_t ntaxstrings;
-    size_t nalloctaxstrings;
-    DM64_t* file2tax;
-    signature_t** result;
-    signature_t** tmpresult;
-    signature_t** subres;
-    int64_t taxnameid_demux;
+    PF_t* fextra;
+    size_t taxfilenamelen;
+    genosig_t** result;
+    genosig_t** tmpresult;
+    genosig_t** subres;
+    genosig_t* refgenes;
+    genosig_t* allsigs;
+    genosig_t* sigavg;
     int gensigs;
+    int nonred;
+    int singlestrand;
+    int usealiases;
+    double renaminglevelmin;
+    double renaminglevelmax;
     size_t nfiles;
+    size_t winsize;
+    char** include_list;
+    char** exclude_list;
+    int64_t* include_ids;
+    int64_t* exclude_ids;
+    size_t nincl;
+    size_t nexcl;
+    time_t step_start;
+    time_t step_duration;
+    int hours, minutes, seconds;
+    int shouldbeincluded;
+    
+    renaminglevelmin = 6.0;
+    renaminglevelmax = 7.0;
     nfiles = *numfiles;
     nocalc = set_basis_function(args, &bf, sig_len, &kmerlen);
+    winsize = 0;
+    if (bf == genosig_minhash) {
+        winsize = kmerlen;
+        kmerlen = *sig_len;
+    }
 
-    result = (signature_t**)calloc(nfiles, sizeof(signature_t*));
+    result = (genosig_t**)calloc(nfiles, sizeof(genosig_t*));
     if (!nocalc) {
         /* prepare taxonomy */
-        ntaxstrings = 1;
-        nalloctaxstrings = 256;
-        taxstrings = calloc(nalloctaxstrings, sizeof(char*));
-        file2tax = new_DM64(DM_ALGORITHM_BASICSORTEDLIST, 0);
-        te = taxextractor_alloc();
+        taxtree = NULL;
         taxtype = NULL;
+        usealiases = 0;
         if (args_ispresent(args, "taxonomy")) {
+            step_start = time(NULL);
             line = args_getstr(args, "taxonomy", 0, "taxonomy.csv");
             taxtype = args_getstr(args, "taxonomy", 1, "PCOF_S");
-            if (PFopen(&f, line, "r")) args_report_warning(NULL, "Taxonomy file <%s> could not be loaded\n", line);
+            if (PFopen(&f, line, "rb")) args_report_warning(NULL, "Taxonomy file <%s> could not be loaded\n", line);
             else {
                 args_report_progress(NULL, "Loading taxonomy...\n");
-                while (line = PFreadline(f)) {
-                    if (ntaxstrings >= nalloctaxstrings) {
-                        nalloctaxstrings *= 2;
-                        taxstrings = (char**) realloc(taxstrings, sizeof(char*)*nalloctaxstrings);
-                    }
-                    n = text_nextchar(line, 0, ',');
-                    taxstrings[ntaxstrings] = (char*)malloc(strlen(line + n + 1) + 1);
-                    memcpy(taxstrings[ntaxstrings], line + n + 1, strlen(line + n + 1) + 1);
-                    line[n] = 0;
-                    taxextractor_add(te, taxtype, line + n + 1);
-                    DM64_append(file2tax, line, (int)strlen(line), ntaxstrings);
-                    free(line);
-                    ntaxstrings++;
+                if (endswith(".ttd", line)) {
+                    taxtree = taxtree_load(f);
                 }
-                /* te should be sorted before going into the parallel section */
-                taxextractor_sort(te); 
-                args_report_progress(NULL, "Finished loading taxonomy\n");
+                else {
+                    if (strcmp(taxtype, "PCOF_S") == 0) {
+                        taxtree = taxtree_fromlineages(f, TAXFMT_PCOF_S);
+                    }
+                    else if (strcmp(taxtype, "GTDB") == 0) {
+                        taxtree = taxtree_fromlineages(f, TAXFMT_GTDB);
+                    }
+                    else if (strcmp(taxtype, "NCBI") == 0) {
+                        tmpstr = os_extractdirname(line);
+                        n = strlen(tmpstr);
+                        k = strlen("nodes.dmp.txt");
+                        tmpstr2 = (char*)malloc(n + k + 1);
+                        memcpy(tmpstr2, tmpstr, n);
+                        memcpy(tmpstr2+n, "nodes.dmp.txt", k + 1);
+                        if (PFopen(&fextra, tmpstr2, "rb")) {
+                            args_report_warning(NULL, "<nodes.dmp.txt> could not be found. Taxonomy not loaded.\n");
+                            args_report_info(NULL, "Please add the file <nodes.dmp.txt> obtained from the NCBI FTP to the current directory\n");
+                        }
+                        else {
+                            taxtree = taxtree_fromrelations(fextra, TAXFMT_NCBI);
+                            PFclose(fextra);
+                            k = strlen("merged.dmp.txt");
+                            tmpstr2 = (char*)realloc(tmpstr2, n + k + 1);
+                            memcpy(tmpstr2 + n, "merged.dmp.txt", k + 1);
+                            if (PFopen(&fextra, tmpstr2, "rb")) {
+                                args_report_info(NULL, "<merged.dmp.txt> not found. Some taxids may be incorrect.\n", line);
+                            }
+                            else {
+                                taxtree_rename(taxtree, fextra, TAXFMT_NCBI);
+                                PFclose(fextra);
+                            }
+                            k = strlen("names.dmp.txt");
+                            tmpstr2 = (char*)realloc(tmpstr2, n + k + 1);
+                            memcpy(tmpstr2 + n, "names.dmp.txt", k + 1);
+                            if (PFopen(&fextra, tmpstr2, "rb")) {
+                                args_report_info(NULL, "<nmes.dmp.txt> not found. Readable names will not be understood.\n", line);
+                            }
+                            else {
+                                taxtree_addleaves(taxtree, fextra, TAXFMT_NCBI);
+                                PFclose(fextra);
+                            }
+                            taxtree_addleaves(taxtree, f, TAXFMT_CSV);
+                        }
+                        free(tmpstr);
+                        free(tmpstr2);
+                    }
+                    if (taxtree) {
+                        taxfilenamelen = strlen(line);
+                        tmpstr = malloc(taxfilenamelen + 5);
+                        memcpy(tmpstr, line, taxfilenamelen);
+                        memcpy(tmpstr + taxfilenamelen, ".ttd", 5);
+                        if (PFopen(&fextra, tmpstr, "wb")) {
+                            args_report_warning(NULL, "<%s> could not be created. Please make sure you have write permission in this folder.\n", tmpstr);
+                        }
+                        else {
+                            taxtree_save(taxtree, fextra);
+                            PFclose(fextra);
+                        }
+                        free(tmpstr);
+                    }
+                }
+                PFclose(f);
+                step_duration = time(NULL) - step_start;
+                hours = (int)(step_duration / (60 * 60));
+                minutes = (int)((step_duration % (60 * 60)) / (60));
+                seconds = (int)((step_duration % (60)));
+                args_report_progress(NULL, "Taxonomy loaded (%d hr %d min %d sec)\n", hours, minutes, seconds);
             }
         }
-
+        if (args_ispresent(args, "filealias")) {
+            tmpstr = args_getstr(args, "filealias", 0, NULL);
+            if (taxtree || tmpstr) {
+                if (!taxtree) taxtree = taxtree_alloc();
+                else usealiases = RENAMEBY_SPECIES;
+                if (tmpstr) {
+                    if (PFopen(&f, tmpstr, "r")) {
+                        args_report_warning(NULL, "Alias-containing file <%s> could not be opened\n", tmpstr);
+                    }
+                    else{
+                        taxtree_rename(taxtree, f, TAXFMT_CSV);
+                        PFclose(f);
+                        usealiases = RENAMEBY_NODELABEL;
+                    }
+                }
+            }
+            else {
+                args_report_warning(NULL, "Please specify either an alias file using -a <path> or provide taxonomy with -t <path> to use aliases\n");
+            }
+        }
         /* read the signatures */
+        nonred = args_ispresent(args, "nonredundant");
+        singlestrand = 0;
+        refgenes = NULL;
+        if (args_ispresent(args, "basis")) {
+            tmpstr = args_getstr(args, "basis", 0, "--");
+            if (beginswith("s_", tmpstr))
+                singlestrand = 1;
+            if (strcmp(tmpstr, "findgene") == 0) {
+                tmpstr = args_getstr(args, "basis", 1, "gene.fasta");
+                if (strcmp(tmpstr, "16S") == 0 || strcmp(tmpstr, "SSU") == 0) {
+                    refgenes = get_gene_signature(tmpstr, NULL, 0, 0, 1, 1, winsize);
+                }
+                else {
+                    refgenes = get_signatures(tmpstr, NULL, 0, 0, 0, 1, 1, NULL,winsize);
+                }
+                refgenes = genosig_suffixtrees(refgenes);
+            }
+        }
         gensigs = (args_ispresent(args, "keepsigs")?1:0);
         if (gensigs && args_ispresent(args, "filelist"))gensigs = 2;
         args_report_progress(NULL, "Reading signatures...\n");
-        if (bf != SSUseq) minseqlen = 2000;
-        else minseqlen = 1200;
+        minseqlen = 2000;
         minseqlen = (size_t)args_getint(args, "filtershort", 0, (int)minseqlen);
         if (nfiles < (size_t) numthreads) numthreads = (int)nfiles;
         omp_set_num_threads(numthreads);
@@ -824,45 +902,44 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t*
         if (countsperproc*numthreads < nfiles)
             countsperproc++;
         args_report_info(NULL, "Each thread handles on average " _LLD_ " files\n", countsperproc);
+        args_report_info(NULL, "Signature length is " _LLD_ "\n", kmerlen);
         i = 0;
         i_p = &i;
+        step_start = time(NULL);
         #pragma omp parallel
         {
-            char* ltaxonstring;
             int nullflag;
             int muxed;
             size_t ifl_added = 0;
-            size_t taxnameid;
+            size_t next_ifla_report = 0;
             int cthread = omp_get_thread_num();
+
             #pragma omp critical
             ifl_added = ((*i_p)++);
             while(ifl_added<nfiles) {
-                result[ifl_added] = get_signatures(sourcefiles[ifl_added], bf, (int)kmerlen, minseqlen);
-                muxed = signature_is_multiplexed(result[ifl_added]);
-                if (!muxed && gensigs==1 && !endswith(".sig", sourcefiles[ifl_added]))
-                    write_sigfile(sourcefiles[ifl_added], result[ifl_added]);
-                if (!muxed && taxtype) {
+                result[ifl_added] = get_signatures(sourcefiles[ifl_added], bf, kmerlen, minseqlen, nonred, singlestrand, 0, refgenes, winsize);
+                muxed = genosig_info_ismuxed(result[ifl_added]);
+                if (result[ifl_added]) {
+                    if (!muxed && gensigs == 1 && !endswith(".sig", sourcefiles[ifl_added]))
+                        write_sigfile(sourcefiles[ifl_added], result[ifl_added]);
                     nullflag = 0;
-                    taxnameid = DM64_get(file2tax, result[ifl_added]->fname, (int)strlen(result[ifl_added]->fname), &nullflag);
-                    ltaxonstring = taxstrings[taxnameid];
-                    if (!nullflag)
-                        taxextractor_translate(te, taxtype, ltaxonstring, result[ifl_added]->lineage, 9);
-                    else {
+                    if (taxtree)
+                        result[ifl_added] = genosig_importlineage(result[ifl_added], taxtree,&nullflag);
+                    if (nullflag) {
                         #pragma omp atomic
                         (*p_notax)++;
                         badtax = sourcefiles[ifl_added];
                     }
-                }
-                if (result[ifl_added]) {
                     #pragma omp atomic
                     (*p_n)++;
                 }
                 else {
                     badload = sourcefiles[ifl_added];
                 }
-                if (nfiles < 100 || (*p_n) % (nfiles / 100) == 0) {
-                    #pragma omp critical
+                if (cthread == 0 && (nfiles < 100 || (*p_n) > next_ifla_report)) {
                     args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) files loaded\r", n, nfiles, (int)((n * 100) / nfiles));
+                    while (next_ifla_report < (*p_n))
+                        next_ifla_report += (nfiles / 100) + 1;
                 }
                 #pragma omp critical
                 ifl_added = ((*i_p)++);
@@ -879,35 +956,35 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t*
             else if (badload)
                 args_report_warning(NULL, "<%> could not be properly loaded\n", badload);
         }
-        /* demultiplex multiplexed signatures */
+        /* demultiplex multiplexed signatures*/
         nfiles = n;
         j = 0;
         for (i = 0;i<n;i++) {
-            if (signature_is_multiplexed(result[i])) {
-                nfiles += signature_get_multiplex_amount(result[i]) - 1;
-                j++;
+            if (result[i]) {
+                if (genosig_info_ismuxed(result[i])) {
+                    nfiles += genosig_info_length(result[i]) - 1;
+                    j++;
+                }
             }
         }
         if (n != nfiles) {
             args_report_progress(NULL, "Additionally, " _LLD_ " signature(s) are contained inside of " _LLD_ " SDB file(s)\n", nfiles - n + j, j);
-            tmpresult = (signature_t**)malloc(sizeof(signature_t*)*nfiles);
+            tmpresult = (genosig_t**)malloc(sizeof(genosig_t*)*nfiles);
             extrafiles = 0;
             for (i = 0;i < n;i++) {
-                if (signature_is_multiplexed(result[i])) {
-                    j = signature_get_multiplex_amount(result[i]);
-                    subres = signature_demultiplex(result[i]);
-                    signature_free(result[i]);
-                    memcpy(tmpresult + extrafiles, subres, sizeof(signature_t*)*(j));
+                if (result[i] && genosig_info_ismuxed(result[i])) {
+                    subres = genosig_demux(result[i],&j);
+                    /* rem: demultiplexing invalidates result[i], so it should not be free'd. Insead it should simply be set to NULL.*/
+                    result[i] = NULL;
+                    memcpy(tmpresult + extrafiles, subres, sizeof(genosig_t*)*(j));
                     free(subres);
-                    if (taxtype) {
+                    if (taxtree) {
                         /* assign taxonomy */
                         for (k = 0;k < j;k++) {
                             nflag = 0;
-                            taxnameid_demux = DM64_get(file2tax, tmpresult[extrafiles + k]->fname, (int)strlen(tmpresult[extrafiles + k]->fname), &nflag);
-                            line = taxstrings[taxnameid_demux];
-                            if (!nflag)
-                                taxextractor_translate(te, taxtype, line, tmpresult[extrafiles + k]->lineage, 9);
-                            else {
+                            if (taxtree) tmpresult[k + extrafiles] = genosig_importlineage(tmpresult[k + extrafiles], taxtree, &nflag);
+                            if (usealiases) tmpresult[k + extrafiles] = genosig_renameby(tmpresult[k + extrafiles], taxtree, COPYLVL_FULL, usealiases);
+                            if (nflag) {
                                 notax++;
                                 badtax = sourcefiles[i];
                             }
@@ -917,6 +994,8 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t*
                 }
                 else {
                     tmpresult[extrafiles] = result[i];
+                    if (taxtree) tmpresult[extrafiles] = genosig_importlineage(tmpresult[extrafiles], taxtree, &nflag);
+                    if (usealiases) tmpresult[extrafiles] = genosig_renameby(tmpresult[extrafiles], taxtree, COPYLVL_FULL, usealiases);
                     extrafiles++;
                 }
             }
@@ -924,33 +1003,163 @@ signature_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t*
             result = tmpresult;
             nfiles = extrafiles;
         }
-        /* generate signature file */
-        if (gensigs) {
-            if (bf == SSUseq) {
-                args_report_warning(NULL, "SSU's cannot be exported as signatures - no signature database file generated\n");
-            }
-            else {
-                line = args_getstr(args, "filelist", 0, "all_sigs.list");
-                if (strcmp(args_getstr(args, "keepsigs", 0, "continue"), "stop") == 0)
-                    line = args_getstr(args, "output", 0, "all_sigs.list");
-                write_multisig_file(line, result, nfiles);
+        else {
+            for (i = 0;i < n;i++) {
+                if (result[i]) {
+                    if (taxtree) result[i] = genosig_importlineage(result[i], taxtree, &nflag);
+                    if (usealiases) result[i] = genosig_renameby(result[i], taxtree, COPYLVL_FULL, usealiases);
+                }
             }
         }
         /* report on taxonomy assignment */
         if (notax > 0) {
             if (notax != 1)
-                args_report_warning(NULL, "Taxonomy could not be assigned for " _LLD_ " signatures\n", nfiles - n);
-            else if(badtax)
-                args_report_warning(NULL, "Taxonomy could not be assigned for <%>\n",badtax);
+                args_report_warning(NULL, "Taxonomy could not be assigned for " _LLD_ " signatures\n", notax);
+            else if (badtax)
+                args_report_warning(NULL, "Taxonomy could not be assigned for <%s>\n", badtax);
         }
-        args_report_progress(NULL, "Finished reading signatures\n");
+        step_duration = time(NULL) - step_start;
+        hours = (int)(step_duration / (60 * 60));
+        minutes = (int)((step_duration % (60 * 60)) / (60));
+        seconds = (int)((step_duration % (60)));
+        args_report_progress(NULL, "Finished reading signatures (%d hr %d min %d sec)\n", hours, minutes, seconds);
+        /* include/exclude signatures */
+        include_list = NULL;
+        exclude_list = NULL;
+        include_ids = NULL;
+        exclude_ids = NULL;
+        nincl = 0;
+        nexcl = 0;
+        if (args_ispresent(args, "include")) {
+            nincl = args_countargs(args, "include");
+            if (args_ispresent(args, "search")) {
+                include_list = (char**)malloc(sizeof(char*)*(nincl+1));
+                include_ids = (int64_t*)malloc(sizeof(int64_t)*(nincl+1));
+                include_list[nincl] = args_getstr(args, "include", (int)nincl, "<none>");
+                if (taxtree)
+                    include_ids[nincl] = taxtree_getid(taxtree, include_list[nincl]);
+                for (i = 0;i < nincl;i++) {
+                    include_list[i] = args_getstr(args, "include", (int)i, "<none>");
+                    if (taxtree)
+                        include_ids[i] = taxtree_getid(taxtree, include_list[i]);
+                }
+                nincl++;
+            }
+            else {
+                include_list = (char**)malloc(sizeof(char*)*nincl);
+                include_ids = (int64_t*)malloc(sizeof(int64_t)*nincl);
+                for (i = 0;i < nincl;i++) {
+                    include_list[i] = args_getstr(args, "include", (int)i, "<none>");
+                    if (taxtree)
+                        include_ids[i] = taxtree_getid(taxtree, include_list[i]);
+                }
+            }
+            
+        }
+        if (args_ispresent(args, "exclude")) {
+            nexcl = args_countargs(args, "exclude");
+            exclude_list = malloc(sizeof(char*)*nexcl);
+            exclude_ids = malloc(sizeof(int64_t)*nexcl);
+            for (i = 0;i < nexcl;i++) {
+                exclude_list[i] = args_getstr(args, "exclude", (int)i, "<none>");
+                if (taxtree)
+                    exclude_ids[i] = taxtree_getid(taxtree, exclude_list[i]);
+            }
+        }
+        j = 0;
+        for (i = 0;i < nfiles;i++) {
+            if (!include_list) {
+                shouldbeincluded = 1;
+            }
+            else {
+                shouldbeincluded = 0;
+                for (k = 0;k < nincl;k++) {
+                    if (include_ids[k] > 0 && genosig_matchesname(result[i], include_ids[k], include_list[k])) {
+                        shouldbeincluded = 1;
+                        break;
+                    }
+                }
+            }
+            if (exclude_list) {
+                for (k = 0;k < nexcl;k++) {
+                    if (exclude_ids[k] > 0 && genosig_matchesname(result[i], exclude_ids[k], exclude_list[k])) {
+                        shouldbeincluded = 0;
+                        break;
+                    }
+                }
+            }
+            if (shouldbeincluded) {
+                result[j] = result[i];
+                j++;
+            }
+            else {
+                genosig_free(result[i]);
+                result[i] = NULL;
+            }
+        }
+        result = (genosig_t**)realloc(result, sizeof(genosig_t*)*j);
+        nfiles = j;
+        if (i != j) {
+            args_report_progress(NULL, _LLD_ " signatures were kept\n", nfiles);
+        }
+        if (include_ids) free(include_ids);
+        if (include_list) free(include_list);
+        if (exclude_ids) free(exclude_ids);
+        if (exclude_list) free(exclude_list);
+        /* generate signature file */
+        if (gensigs) {
+            line = args_getstr(args, "filelist", 0, "all_sigs.list");
+            if (strcmp(args_getstr(args, "keepsigs", 0, "continue"), "stop") == 0)
+                line = args_getstr(args, "output", 0, "all_sigs.list");
+            if (strcmp(args_getstr(args, "keepsigs", 0, "continue"), "average") == 0)
+                line = args_getstr(args, "output", 0, "all_sigs.list");
+            if (strcmp(args_getstr(args, "keepsigs", 0, "continue"), "text") == 0)
+                line = args_getstr(args, "output", 0, "all_sigs.list");
+            n = strlen(line);
+            i = n;
+            tmpstr = malloc(i + 5);
+            i--;
+            while (i > 0 && line[i]!='.' && line[i]!='/' && line[i]!='\\') {
+                i--;
+            }
+            if (i == 0)i = n;
+            memcpy(tmpstr, line, i);
+            if (strcmp(args_getstr(args, "keepsigs", 0, "continue"), "text") == 0)
+                memcpy(tmpstr + i, ".txt", 5);
+            else
+                memcpy(tmpstr + i, ".sdb", 5);
+            if (PFopen(&f, tmpstr, "wb")) {
+                args_report_warning(NULL, "Signature database <%s> could not be created\n", tmpstr);
+            }
+            else {
+                if (strcmp(args_getstr(args, "keepsigs", 0, "continue"), "stop") == 0) {
+                    PFclose(f);
+                    allsigs = genosig_multiplex(result, nfiles);
+                    genosig_export(allsigs, tmpstr);
+                    result = genosig_demux(allsigs, &nfiles);
+                }
+                else if (strcmp(args_getstr(args, "keepsigs", 0, "continue"), "average") == 0) {
+                    PFclose(f);
+                    allsigs = genosig_multiplex(result, nfiles);
+                    sigavg = genosig_avgsig(allsigs, 0);
+                    genosig_linkname(sigavg, tmpstr);
+                    genosig_export(sigavg, tmpstr);
+                    if (sigavg != allsigs) genosig_free(sigavg);
+                    result = genosig_demux(allsigs, &nfiles);
+                }
+                else {
+                    for (i = 0;i < nfiles;i++) {
+                        if (result[i])
+                            genosig_savetxt(result[i], f);
+                    }
+                    PFclose(f);
+                }
+            }
+        }
         /* cleanup */
-        free_DM64(file2tax);
-        for (i = 0;i < ntaxstrings;i++) {
-            if (taxstrings[i])free(taxstrings[i]);
-        }
-        free(taxstrings);
-        taxextractor_free(te);
+        if (taxtree) taxtree_free(taxtree);
+        if (refgenes)genosig_free(refgenes);
+        refgenes = NULL;
         args_report_info(NULL, "Signature cleanup complete.\n");
     }
     *numfiles = nfiles;
@@ -971,6 +1180,8 @@ int strtotaxsim(const char* str) {
     if (strcmp(str, "Same_Genus") == 0)return 5;
     if (strcmp(str, "Same_Species") == 0)return 6;
     if (strcmp(str, "Same_Subspecies") == 0)return 7;
+    if (strcmp(str, "Same_Subgroup") == 0)return 7;
+    if (strcmp(str, "Same_Type") == 0)return 7;
     if (strcmp(str, "Replicate") == 0)return 8;
     return -1;
 }
@@ -991,7 +1202,7 @@ char* taxsimtostr(int val) {
     case 6:
         return "Same_Species";
     case 7:
-        return "Same_Subspecies";
+        return "Same_Subgroup";
     case 8:
         return "Replicate";
     default:
@@ -999,18 +1210,17 @@ char* taxsimtostr(int val) {
     }
 }
 
-
-char* GenDisCal_ordered_output_gen_line(signature_t** signatures,size_t fileA, size_t fileB, int simlevel) {
+char* GenDisCal_ordered_output_gen_line(genosig_t** signatures,size_t fileA, size_t fileB, int simlevel) {
     char* filename1;
     char* filename2;
     char* output;
     char* simlevelstr;
     size_t k;
     simlevelstr = taxsimtostr(simlevel);
-    if (signatures[fileA] && signatures[fileA]->fname) filename1 = signatures[fileA]->fname;
-    else filename1 = "<File could not opened>";
-    if (signatures[fileB] && signatures[fileB]->fname) filename2 = signatures[fileB]->fname;
-    else filename2 = "<File could not opened>";
+    if (signatures[fileA] && genosig_info_name(signatures[fileA])) filename1 = genosig_info_name(signatures[fileA]);
+    else filename1 = "<File not opened>";
+    if (signatures[fileB] && genosig_info_name(signatures[fileB])) filename2 = genosig_info_name(signatures[fileB]);
+    else filename2 = "<File not opened>";
     k = strlen(filename1) + strlen(filename2) + strlen(taxsimtostr(simlevel)) + 3;
     output = malloc(k);
 #ifdef _WIN32
@@ -1025,7 +1235,7 @@ char* GenDisCal_ordered_output_gen_line(signature_t** signatures,size_t fileA, s
 /* the amount of arguments for this function is a bit excessive*/
 void GenDisCal_print_ordered_output(
         size_t orderedamount, int* ocmp_types, double* ocmp_results, size_t nfiles,
-        int issearch, int sort_by_distance, PF_t* outputf, signature_t** signatures
+        int issearch, int sort_by_distance, PF_t* outputf, genosig_t** signatures
     ) {
     size_t i, j, k, n;
     char** outputlines;
@@ -1072,8 +1282,8 @@ void GenDisCal_print_ordered_output(
 }
 
 datatable_t* GenDisCal_perform_comparisons_hist_thread(
-        args_t* args, signature_t** signatures, size_t nfiles, size_t sig_len,
-        int threadid, int numthreads, size_t* p_n, method_function mf, double metharg) {
+        args_t* args, genosig_t** signatures, size_t nfiles, size_t sig_len,
+        int threadid, int numthreads, size_t* p_n, genosig_df mf, any_t metharg) {
     double dist = 0.0;
     double oldval;
     int simlevel;
@@ -1117,10 +1327,10 @@ datatable_t* GenDisCal_perform_comparisons_hist_thread(
     nextprint = 0;
     for (ifl_added = firstf;ifl_added < lastf;ifl_added += numthreads) {
         if (issearch) {
-            simlevel = signature_taxsimlevel(signatures[ifl_added], signatures[nfiles]);
+            simlevel = (int)genodist_bytaxonomy(signatures[ifl_added], signatures[nfiles], metharg);
             if (onlylevel < -1 || simlevel == onlylevel) {
                 if (signatures[ifl_added] && signatures[nfiles])
-                    dist = mf((double*)(signatures[ifl_added]->data), (double*)(signatures[nfiles]->data), sig_len, metharg);
+                    dist = mf(signatures[ifl_added], signatures[nfiles], metharg) ;
                 else
                     dist = 1.0;
                 if (dist >= minval && dist <= maxval) {
@@ -1148,10 +1358,10 @@ datatable_t* GenDisCal_perform_comparisons_hist_thread(
         }
         else {
             for (ifl_c = ifl_added + 1; ifl_c < nfiles;ifl_c++) {
-                simlevel = signature_taxsimlevel(signatures[ifl_added], signatures[ifl_c]);
+                simlevel = (int)genodist_bytaxonomy(signatures[ifl_added], signatures[ifl_c], metharg);
                 if (onlylevel < -1 || simlevel == onlylevel) {
                     if (signatures[ifl_added] && signatures[ifl_c])
-                        dist = mf((double*)(signatures[ifl_added]->data), (double*)(signatures[ifl_c]->data), sig_len, metharg);
+                        dist = mf(signatures[ifl_added],signatures[ifl_c], metharg);
                     else
                         dist = 1.0;
                     if (dist >= 0.0) {
@@ -1172,7 +1382,6 @@ datatable_t* GenDisCal_perform_comparisons_hist_thread(
                             nextprint=n;
                         args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) comparisons performed\r", n, nfsquare, (int)(((double)n * 100) / (double)nfsquare));
                     }
-
                 }
             }
         }
@@ -1180,9 +1389,9 @@ datatable_t* GenDisCal_perform_comparisons_hist_thread(
     return otable;
 }
 
-int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t nfiles, size_t sig_len, int numthreads) {
-    method_function mf;
-    double metharg;
+int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t nfiles, size_t sig_len, int numthreads) {
+    genosig_df mf;
+    any_t metharg;
     int nocalc;
     int outputmode;
     double binwidth;
@@ -1190,25 +1399,35 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
     double maxval;
     int onlylevel;
     int issearch;
-    int sort_by_distance;
+    int sort_by_distance, do_clustering;
     double* ocmp_results;
     int* ocmp_types;
     datatable_t* otable;
     datatable_t** otable_sub;
     PF_t* outputf;
-    size_t i,n;
+    char* tmpstr1;
+    char* tmpstr2;
+    size_t tmpstrlen;
+    PF_t* tree_f;
+    size_t i, n;
     size_t* p_n;
     size_t nfsquare;
     size_t countsperproc;
     size_t orderedamount;
+    size_t nclusters;
+    time_t step_start;
+    time_t step_duration;
+    int hours, minutes, seconds;
     /* parse relevant arguments */
+    do_clustering = 0;
     nocalc = set_method_function(args, &mf, &metharg);
     args_report_info(NULL, "Method function selected successfully\n", numthreads);
-    
+
     outputmode = OUTPUTMODE_NORMAL;
     ocmp_results = NULL;
     ocmp_types = NULL;
     sort_by_distance = args_ispresent(args, "sort_by_distance");
+    do_clustering = args_ispresent(args, "clustering");
     if (args_ispresent(args, "ordered") || sort_by_distance) {
         outputmode = OUTPUTMODE_ORDERED;
     }
@@ -1218,7 +1437,7 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
         outputmode = OUTPUTMODE_HIST;
         binwidth = args_getdouble(args, "histogram", 0, 0.001);
     }
-    
+
     if (outputmode == OUTPUTMODE_ORDERED) {
         args_report_info(NULL, "Output mode: ORDERED\n");
     }
@@ -1231,7 +1450,6 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
     if (outputmode == OUTPUTMODE_MATRIX) {
         args_report_info(NULL, "Output mode: DISTANCE MATRIX\n");
     }
-
     minval = args_getdouble(args, "above", 0, -INFINITY);
     maxval = args_getdouble(args, "below", 0, INFINITY);
     if (args_ispresent(args, "only"))
@@ -1268,9 +1486,9 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
     if (outputmode == OUTPUTMODE_MATRIX) {
         otable = datatable_alloc(nfiles, nfiles, NAN);
         for (i = 0;i < nfiles;i++) {
-            if (signatures[i] && signatures[i]->fname) {
-                datatable_setcolname(otable, i, signatures[i]->fname);
-                datatable_setrowname(otable, i, signatures[i]->fname);
+            if (signatures[i] && genosig_info_name(signatures[i])) {
+                datatable_setcolname(otable, i, genosig_info_name(signatures[i]));
+                datatable_setrowname(otable, i, genosig_info_name(signatures[i]));
             }
             else {
                 datatable_setcolname(otable, i, "NA");
@@ -1306,6 +1524,7 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
         else {
             otable_sub = NULL;
         }
+        step_start = time(NULL);
         #ifndef NOOPENMP
         #pragma omp parallel
         #endif
@@ -1329,27 +1548,24 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
             else{
             if (firstf > nfiles) firstf = nfiles;
             for (ifl_added = firstf;ifl_added < lastf;ifl_added += numthreads) {
-                if (cthread == 0) {
-                    args_report_info(NULL, "\t\t\t(" _LLD_ ")", ifl_added);
-                }
-                if (outputmode == OUTPUTMODE_MATRIX) {
+               if (outputmode == OUTPUTMODE_MATRIX) {
                     datatable_set(otable, ifl_added, ifl_added, 0.0);
                 }
                 if (issearch) {
                     if (outputmode == OUTPUTMODE_ORDERED) {
                         ocmp_types[ifl_added] = -3;
                     }
-                    simlevel = signature_taxsimlevel(signatures[ifl_added], signatures[nfiles]);
+                    simlevel = (int)genodist_bytaxonomy(signatures[ifl_added], signatures[nfiles], metharg);
                     if (onlylevel < -1 || simlevel == onlylevel) {
                         if (signatures[ifl_added] && signatures[nfiles])
-                            dist = mf((double*)(signatures[ifl_added]->data), (double*)(signatures[nfiles]->data), sig_len, metharg);
+                            dist = mf(signatures[ifl_added], signatures[nfiles], metharg);
                         else
                             dist = 1.0;
                         if (dist >= minval && dist <= maxval) {
                             if (outputmode == OUTPUTMODE_NORMAL) {
-                                if (signatures[ifl_added] && signatures[ifl_added]->fname) fn1 = signatures[ifl_added]->fname;
+                                if (signatures[ifl_added] && genosig_info_name(signatures[ifl_added])) fn1 = genosig_info_name(signatures[ifl_added]);
                                 else fn1 = "<File could not opened>";
-                                if (signatures[nfiles] && signatures[nfiles]->fname) fn2 = signatures[nfiles]->fname;
+                                if (signatures[nfiles] && genosig_info_name(signatures[nfiles])) fn2 = genosig_info_name(signatures[nfiles]);
                                 else fn2 = "<File could not opened>";
 #pragma omp critical
                                 PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
@@ -1395,17 +1611,23 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
                     for (ifl_c = ifl_added + 1; ifl_c < nfiles;ifl_c++) {
                         if (outputmode == OUTPUTMODE_ORDERED)
                             ocmp_types[ifl_c + ordered_offset - 1] = -3;
-                        simlevel = signature_taxsimlevel(signatures[ifl_added], signatures[ifl_c]);
+                        simlevel = (int)genodist_bytaxonomy(signatures[ifl_added], signatures[ifl_c], metharg);
                         if (onlylevel < -1 || simlevel == onlylevel) {
                             if (signatures[ifl_added] && signatures[ifl_c])
-                                dist = mf((double*)(signatures[ifl_added]->data), (double*)(signatures[ifl_c]->data), sig_len, metharg);
+                                dist = mf(signatures[ifl_added], signatures[ifl_c], metharg);
                             else
                                 dist = 1.0;
+                            #pragma omp atomic
+                            (*p_n)++;
+                            if (nfsquare < 100 || (*p_n) % (nfsquare / 100) == 0) {
+                                #pragma omp critical
+                                args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) comparisons performed\r", (*p_n), nfsquare, (int)(((double)n * 100) / (double)nfsquare));
+                            }
                             if (dist >= minval && dist <= maxval) {
                                 if (outputmode == OUTPUTMODE_NORMAL) {
-                                    if (signatures[ifl_added] && signatures[ifl_added]->fname) fn1 = signatures[ifl_added]->fname;
+                                    if (signatures[ifl_added] && genosig_info_name(signatures[ifl_added])) fn1 = genosig_info_name(signatures[ifl_added]);
                                     else fn1 = "<File could not opened>";
-                                    if (signatures[ifl_c] && signatures[ifl_c]->fname) fn2 = signatures[ifl_c]->fname;
+                                    if (signatures[ifl_c] && genosig_info_name(signatures[ifl_c])) fn2 = genosig_info_name(signatures[ifl_c]);
                                     else fn2 = "<File could not opened>";
 #pragma omp critical
                                     PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
@@ -1435,12 +1657,6 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
                                         datatable_set(otable, ifl_c, ifl_added, dist);
                                     }
                                 }
-#pragma omp atomic
-                                (*p_n)++;
-                                if (nfsquare < 100 || (*p_n) % (nfsquare / 100) == 0) {
-#pragma omp critical
-                                    args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) comparisons performed\r", (*p_n), nfsquare, (int)(((double)n * 100) / (double)nfsquare));
-                                }
                             }
                         }
                     }
@@ -1456,7 +1672,25 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
             }
             free(otable_sub);
         }
-        args_report_progress(NULL, "A Total of " _LLD_ " comparisons were performed                        \n", n);
+        step_duration = time(NULL) - step_start;
+        hours = (int)(step_duration / (60 * 60));
+        minutes = (int)((step_duration % (60 * 60)) / (60));
+        seconds = (int)((step_duration % (60)));
+        args_report_progress(NULL, "A Total of " _LLD_ " comparisons were performed (%d hr %d min %d sec)\n", n, hours, minutes, seconds);
+    }
+    tree_f = NULL;
+    if (outputmode == OUTPUTMODE_MATRIX && (do_clustering || sort_by_distance)) {
+        tmpstr1 = args_getstr(args, "output", 0, "tree");
+        tmpstrlen = strlen(tmpstr1);
+        tmpstr2 = malloc(tmpstrlen + 5);
+        memcpy(tmpstr2, tmpstr1, tmpstrlen);
+        i = tmpstrlen;
+        while (i > 0 && tmpstr2[i - 1] != '.')i--;
+        if (i == 0) i = tmpstrlen;
+        else i--;
+        memcpy(tmpstr2 + i, ".tre", 5);
+        PFopen(&tree_f, tmpstr2, "wb");
+        free(tmpstr2);
     }
     if (!nocalc && otable) {
         if (outputmode == OUTPUTMODE_HIST) {
@@ -1471,27 +1705,100 @@ int GenDisCal_perform_comparisons(args_t* args, signature_t** signatures, size_t
             datatable_write(otable, outputf, ",", DATATABLE_WRITECOLNAMES);
         }
         if (outputmode == OUTPUTMODE_MATRIX) {
+            if (sort_by_distance) {
+                step_start = time(NULL);
+                if (strcmp(args_getstr(args, "clustering", 0, "single"), "single") == 0) {
+                    args_report_progress(NULL, "Sorting the output matrix using single linkage...\n");
+                    nclusters = datatable_dmsingleclust(otable, tree_f);
+                    do_clustering = 0;
+                    PFclose(tree_f);
+                }
+                else if (strcmp(args_getstr(args, "clustering", 0, "sort"), "ward") == 0) {
+                    args_report_warning(NULL, "Ward clustering destroys the distance matrix, and as such the output sorted using single linkage.\n");
+                    args_report_progress(NULL, "Sorting the output matrix using single linkage...\n");
+                    nclusters = datatable_dmsingleclust(otable, NULL);
+                }
+                else {
+                    args_report_progress(NULL, "Sorting the output matrix using a basic sorting approach...\n");
+                    nclusters = datatable_dmrclust(otable, 0.5);
+                    do_clustering = 0;
+                    PFclose(tree_f);
+                }
+                step_duration = time(NULL) - step_start;
+                hours = (int)(step_duration / (60 * 60));
+                minutes = (int)((step_duration % (60 * 60)) / (60));
+                seconds = (int)((step_duration % (60)));
+                args_report_progress(NULL, "Output matrix seems to have about " _LLD_ " clusters. (%d hr %d min %d sec)\n",
+                    nclusters, hours, minutes, seconds);
+            }
             datatable_write(otable, outputf, ",", DATATABLE_WRITECOLNAMES | DATATABLE_WRITEROWNAMES);
         }
     }
     if (!nocalc && outputmode == OUTPUTMODE_ORDERED) {
         GenDisCal_print_ordered_output(orderedamount, ocmp_types, ocmp_results, nfiles, issearch, sort_by_distance, outputf, signatures);
     }
+    if (!nocalc && outputmode == OUTPUTMODE_MATRIX && do_clustering) {
+
+        args_report_progress(NULL, "Printing dendrogram based on the output matrix...\n");
+        step_start = time(NULL);
+        if (strcmp(args_getstr(args, "clustering", 0, "ward"), "ward") == 0)
+            nclusters = datatable_dmwardclust(otable, 0.01, tree_f);
+        if (strcmp(args_getstr(args, "clustering", 0, "ward"), "single") == 0)
+            nclusters = datatable_dmsingleclust(otable, tree_f);
+        PFclose(tree_f);
+        step_duration = time(NULL) - step_start;
+        hours = (int)(step_duration / (60 * 60));
+        minutes = (int)((step_duration % (60 * 60)) / (60));
+        seconds = (int)((step_duration % (60)));
+        args_report_progress(NULL, "Output seems to have about " _LLD_ " clusters. (%d hr %d min %d sec)\n", nclusters, hours, minutes, seconds);
+    }
     /* cleanup */
-    PFclose(outputf);
     if (otable)datatable_free(otable);
     return 0;
 }
 
 int GenDisCal(args_t* args) {
     char** filelist;
-    signature_t** siglist;
+    genosig_t** siglist;
     size_t i;
     size_t numfiles, nfilesmod;
     size_t siglen;
     int numthreads;
     filelist = GenDisCal_get_file_list(args, &numfiles);
-    if (numfiles < 1) {
+    if (args_ispresent(args, "license")) {
+        fprintf(stdout, 
+                "GenDisCal\n"
+                "-------------------------------------------------------------------------------\n"
+                "MIT License\n"
+                "\n"
+                "Copyright (c) 2019 Gleb Goussarov\n"
+                "\n"
+                "Permission is hereby granted, free of charge, to any person obtaining a copy\n"
+                "of this software and associated documentation files (the \"Software\"), to deal\n"
+                "in the Software without restriction, including without limitation the rights\n"
+                "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n"
+                "copies of the Software, and to permit persons to whom the Software is\n"
+                "furnished to do so, subject to the following conditions:\n"
+                "\n"
+                "The above copyright notice and this permission notice shall be included in all\n"
+                "copies or substantial portions of the Software.\n"
+                "\n"
+                "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n"
+                "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+                "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
+                "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+                "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+                "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n"
+                "SOFTWARE.\n"
+                "------------------------------------------------------------------------------\n");
+    }
+    else if (args_ispresent(args, "version")) {
+        fprintf(stdout, "%s\n", VERSION_NAME);
+    }
+    else if (args_ispresent(args, "changes")) {
+        fprintf(stdout, "%s\n", CHANGES);
+    }
+    else if (numfiles < 1) {
         args_report_error(NULL, "Number of files (" _LLD_ ") to be loaded is below 2! Aborting.\n", numfiles);
     }
     else {
@@ -1503,11 +1810,12 @@ int GenDisCal(args_t* args) {
             args_report_error(NULL, "Number of files (" _LLD_ ") to be loaded is below 2! Aborting.\n", numfiles);
         }
         else {
-            if(!args_ispresent(args,"keepsigs") || strcmp(args_getstr(args,"keepsigs",0,"continue"),"stop")!=0)
+            if (!args_ispresent(args, "keepsigs") || strcmp(args_getstr(args, "keepsigs", 0, "continue"), "continue") == 0) {
                 GenDisCal_perform_comparisons(args, siglist, nfilesmod, siglen, numthreads);
+            }
 
-            for (i = 0;i < numfiles;i++) {
-                if (siglist[i])signature_free(siglist[i]);
+            for (i = 0;i < nfilesmod;i++) {
+                if (siglist[i])genosig_free(siglist[i]);
                 siglist[i] = NULL;
             }
         }

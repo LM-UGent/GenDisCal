@@ -23,6 +23,8 @@ void args_add_help(args_t* target, const char* longname, const char* fullname, c
 int args_getint(args_t* target, const char* longname, int argindex, int defaultval);
 double args_getdouble(args_t* target, const char* longname, int argindex, double defaultval);
 char* args_getstr(args_t* target, const char* longname, int argindex, char* defaultval);
+int args_getintfromstr(args_t* target, const char* longname, int argindex, int defaultval);
+double args_getdoublefromstr(args_t* target, const char* longname, int argindex, double defaultval);
 int args_countargs(args_t* target, const char* longname);
 int args_countfreeargs(args_t* target);
 int args_ispresent(args_t* target, const char* longname);

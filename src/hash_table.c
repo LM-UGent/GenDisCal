@@ -1,3 +1,27 @@
+/*
+MIT License
+
+Copyright (c) 2019 Gleb Goussarov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 #include "hash_table.h"
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +39,11 @@ static inline char* _htkeydata_key(keyptr_t key) {
 }
 static inline keyptr_t _htkeydata_nextkey(keyptr_t key, size_t extrasize) {
     return ((keyptr_t*)(key+1+sizeof(size_t)+_htkeydata_length(key)+extrasize))[0];
+}
+static inline void _htkeydata_setnext(keyptr_t prevkey, keyptr_t nextkey, size_t extrasize) {
+    prevkey[0] = (char)2;
+    nextkey[0] = (char)1;
+    ((keyptr_t*)(prevkey + 1 + sizeof(size_t) + _htkeydata_length(prevkey) + extrasize))[0] = nextkey;
 }
 static inline int32_t _htkeydata_value32(keyptr_t key) {
     return ((int32_t*)(key + _htkeydata_length(key) + 1 + sizeof(size_t)))[0];
@@ -258,6 +287,7 @@ void ht32_free(ht32_t* target) {
         free(target->keys);
         target->nalloc = 0;
     }
+    hashdesc_free(target->hashdesc);
     free(target);
 }
 int32_t ht32_get(ht32_t* target, char* key, size_t keylen, int* nullflag) {
@@ -447,6 +477,66 @@ size_t ht32_astables(ht32_t * target, char*** p_listofnames,size_t** p_listoflen
     *p_listoflens = resultlen;
     return i;
 }
+void ht32_save(ht32_t* table, PF_t* file) {
+    size_t i, j;
+    size_t len;
+    keyptr_t curkey;
+    j = 0;
+    curkey = table->keys[0];
+    PFputint64(file, (uint64_t)(table->nalloc));
+    PFputint64(file, (uint64_t)(table->nset));
+    hashdesc_save(table->hashdesc, file);
+    for (i = 0;i < table->nset;i++) {
+        if (table->keys[j] == NULL) {
+            while (table->keys[j] == NULL)
+                j++;
+            curkey = table->keys[j];
+        }
+        PFputint64(file, (int64_t)j);
+        len = _htkeydata_length(curkey);
+        PFputint64(file, (int64_t)len);
+        PFwrite(_htkeydata_key(curkey), 1, len, file);
+        PFputint32(file, _htkeydata_value32(curkey));
+        if (_htkeydata_type(curkey) == 2)
+            curkey = _htkeydata_nextkey(curkey, sizeof(int32_t));
+        else {
+            j++;
+            curkey = table->keys[j];
+        }
+    }
+}
+ht32_t* ht32_load(PF_t* file) {
+    ht32_t* result;
+    size_t i, j;
+    size_t len;
+    char* key;
+    keyptr_t keyptr;
+    size_t depth;
+    int nf;
+    int32_t value;
+    result = malloc(sizeof(ht32_t));
+    result->nalloc = (size_t)PFgetint64(file);
+    result->nset = (size_t)PFgetint64(file);
+    result->hashdesc = hashdesc_load(file);
+    result->keys = (keyptr_t*)calloc(result->nalloc, sizeof(keyptr_t));
+    for (i = 0;i < result->nset;i++) {
+        j = (size_t)PFgetint64(file);
+        len = (size_t)PFgetint64(file);
+        value = PFgetint32(file);
+        key = malloc(len);
+        PFread(key, 1, len, file);
+        if (result->keys[j]) {
+            keyptr = result->keys[j];
+            result->keys[j] = _htkeydata_set32(keyptr, key, len, &depth, value, &nf);
+        }
+        else {
+            result->keys[j] = _htkeydata_create32(key, len, value);
+        }
+    }
+    return result;
+}
+
+
 
 struct hash_table_64_t {
     hashdesc_t* hashdesc;
@@ -488,6 +578,7 @@ void ht64_free(ht64_t* target) {
         free(target->keys);
         target->nalloc = 0;
     }
+    hashdesc_free(target->hashdesc);
     free(target);
 }
 int64_t ht64_get(ht64_t* target, char* key, size_t keylen, int* nullflag) {
@@ -532,9 +623,7 @@ static void _ht64_rehash(ht64_t* target, size_t newnumel) {
     size_t keylen;
     int64_t keyvalue;
     size_t newindex;
-    size_t depth;
     char* keyname;
-    int nullflag;
     newhdesc = target->hashdesc;
     hashdesc_init_basic(newhdesc, newnumel);
     newkeys = (keyptr_t*)calloc(newnumel, sizeof(keyptr_t));
@@ -553,10 +642,12 @@ static void _ht64_rehash(ht64_t* target, size_t newnumel) {
                     tmpkey = _htkeydata_nextkey(tmpkey, sizeof(int64_t));
                 }
                 else {
-                    newkeys[newindex] = _htkeydata_set64(newkeys[newindex], keyname, keylen, &depth, keyvalue, &nullflag);
-                    tmpkey2 = _htkeydata_nextkey(tmpkey, sizeof(int64_t));
-                    _htkeydata_rm(tmpkey, keyname, keylen, sizeof(int64_t));
-                    tmpkey = tmpkey2;
+                    tmpkey2 = newkeys[newindex];
+                    while (_htkeydata_type(tmpkey2) == 2) {
+                        tmpkey2 = _htkeydata_nextkey(tmpkey2,sizeof(int64_t));
+                    }
+                    _htkeydata_setnext(tmpkey2, tmpkey, sizeof(int64_t));
+                    tmpkey = _htkeydata_nextkey(tmpkey, sizeof(int64_t));
                 }
             }
             keylen = _htkeydata_length(tmpkey);
@@ -568,10 +659,12 @@ static void _ht64_rehash(ht64_t* target, size_t newnumel) {
                 ((char*)tmpkey)[0] = 1; /* change the type to be an end node*/
             }
             else {
-                newkeys[newindex] = _htkeydata_set64(newkeys[newindex], keyname, keylen, &depth, keyvalue, &nullflag);
-                tmpkey2 = _htkeydata_nextkey(tmpkey, sizeof(int64_t));
-                _htkeydata_rm(tmpkey, keyname, keylen, sizeof(int64_t));
-                tmpkey = tmpkey2;
+                tmpkey2 = newkeys[newindex];
+                while (_htkeydata_type(tmpkey2) == 2) {
+                    tmpkey2 = _htkeydata_nextkey(tmpkey2, sizeof(int64_t));
+                }
+                _htkeydata_setnext(tmpkey2, tmpkey, sizeof(int64_t));
+                tmpkey = _htkeydata_nextkey(tmpkey, sizeof(int64_t));
             }
         }
     }
@@ -679,4 +772,64 @@ size_t ht64_astables(ht64_t * target, char*** p_listofnames, size_t** p_listofle
     if (p_listoflens)
         *p_listoflens = resultlen;
     return i;
+}
+void ht64_save(ht64_t* table, PF_t* file) {
+    size_t i, j;
+    size_t len;
+    keyptr_t curkey;
+    j = 0;
+    curkey = table->keys[0];
+    PFputint64(file, (uint64_t)(table->nalloc));
+    PFputint64(file, (uint64_t)(table->nset));
+    hashdesc_save(table->hashdesc, file);
+    for (i = 0;i < table->nset;i++) {
+        if (table->keys[j] == NULL) {
+            while (table->keys[j] == NULL)
+                j++;
+            curkey = table->keys[j];
+        }
+        PFputint64(file, (int64_t)j);
+        len = _htkeydata_length(curkey);
+        PFputint64(file, (int64_t)len);
+        PFwrite(_htkeydata_key(curkey), 1, len, file);
+        PFputint64(file, _htkeydata_value64(curkey));
+        if (_htkeydata_type(curkey) == 2)
+            curkey = _htkeydata_nextkey(curkey, sizeof(int64_t));
+        else {
+            j++;
+            curkey = table->keys[j];
+        }
+    }
+}
+ht64_t* ht64_load(PF_t* file) {
+    ht64_t* result;
+    size_t i,j;
+    size_t len;
+    char* key;
+    keyptr_t keyptr;
+    size_t depth;
+    int nf;
+    int64_t value;
+    result = malloc(sizeof(ht64_t));
+    result->nalloc = (size_t)PFgetint64(file);
+    result->nset = (size_t)PFgetint64(file);
+    result->hashdesc = hashdesc_load(file);
+    result->keys = (keyptr_t*)calloc(result->nalloc, sizeof(keyptr_t));
+    key = NULL;
+    for (i = 0;i < result->nset;i++) {
+        j = (size_t)PFgetint64(file);
+        len = (size_t)PFgetint64(file);
+        key = realloc(key,len);
+        PFread(key, 1, len, file);
+        value = PFgetint64(file);
+        if (result->keys[j]) {
+            keyptr = result->keys[j];
+            result->keys[j] = _htkeydata_set64(keyptr, key, len, &depth, value, &nf);
+        }
+        else {
+            result->keys[j] = _htkeydata_create64(key, len, value);
+        }
+    }
+    if (key) free(key);
+    return result;
 }
