@@ -11,6 +11,12 @@ or from here, as a compressed file) and run `make`. This should produce an obj d
 a bin directory. The runnable application will be located in the bin directory. GenDisCal
 can be compiled on windows, but no makefile is provided for this purpose at the moment.
 
+Alternatively, you may use the "release" libraries, which also countains the graphical user
+interface (the ".jar" file). In order to use the GUI, please download the binary that is
+suitable for your operating system as well as the ".jar" file. You will need to link the
+binary before the GUI can produce results. This can be done through `File > Set GenDisCal Path`.
+
+
 ## Usage
 
 GenDisCal treats unnamed arguments as input files and outputs to stdout by default. The output
