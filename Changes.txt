@@ -1,0 +1,8 @@
+v1.1.1
+GUI:
+*The "Import file list" button should now work as intended
+*The "minhash ANI" button should now work as intended
+*Added an option to generate human-readable signatures as an output format
+
+v1.1.0
+Post-publication release
