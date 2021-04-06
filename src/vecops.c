@@ -363,7 +363,7 @@ size_t veci32_quantileid(int32_t* source, size_t len, size_t targid) {
         if (maxval < source[i]) maxval = source[i];
         oldorder[i] = i;
     }
-    pivot_val = minval + (maxval - minval)*((double)(targid) / (double)(len));
+    pivot_val = minval + (int32_t)((maxval - minval)*((double)(targid) / (double)(len)));
 
     i0 = 0;
     imax = len;
@@ -584,7 +584,7 @@ size_t veci64_quantileid(int64_t* source, size_t len, size_t targid) {
         if (maxval < source[i]) maxval = source[i];
         oldorder[i] = i;
     }
-    pivot_val = minval + (maxval - minval)*((double)(targid) / (double)(len));
+    pivot_val = minval + (int64_t)((maxval - minval)*((double)(targid) / (double)(len)));
 
     i0 = 0;
     imax = len;

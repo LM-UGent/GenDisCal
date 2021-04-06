@@ -54,7 +54,8 @@ SOFTWARE.
 #define _SIGNAME_GENOMELEN  11
 #define _SIGNAME_FILENAME   12
 #define _SIGNAME_KARLINL    13
-#define _SIGNAME_MAX        14
+#define _SIGNAME_MULTINORM  14
+#define _SIGNAME_MAX        15
 
 struct genosig_t {
     nucseq** contigs;
@@ -421,6 +422,10 @@ genosig_t* genosig_loadbin(PF_t* file){
         return NULL;
     }
     i = PFread(out->name, 1, labellen, file);
+    if (i != labellen) {
+        genosig_free(out);
+        return NULL;
+    }
     out->name[i] = 0;
     out->allocatedname = 1;
     /* sanity check */
@@ -460,6 +465,7 @@ genosig_t* genosig_loadbin(PF_t* file){
     case _SIGNAME_GC:
     case _SIGNAME_GENOMELEN:
     case _SIGNAME_KARLINL:
+    case _SIGNAME_MULTINORM:
         out->sigdata = malloc(out->sigsize);
         i = PFread(out->sigdata, 1, out->sigsize, file);
         if (i < out->sigsize) incorrect = 1;
@@ -479,6 +485,7 @@ genosig_t* genosig_loadbin(PF_t* file){
         }
         break;
     default:
+        incorrect = 1;
         break;
     }
     if (incorrect) {
@@ -496,7 +503,7 @@ char* _genosig_astxt(genosig_t* sig, size_t* outsize, char* prefixstr, char sepa
     char* suffix;
     size_t* partlens;
     size_t nparts;
-    size_t tmpsz, signamelen;
+    size_t tmpsz, signamelen, siglen;
     size_t resultlen;
     size_t i;
     int64_t valuei;
@@ -527,6 +534,9 @@ char* _genosig_astxt(genosig_t* sig, size_t* outsize, char* prefixstr, char sepa
         case _SIGNAME_KARLIN:
         case _SIGNAME_KARLINL:
             signame = "AltKarlinSignature";
+            break;
+        case _SIGNAME_MULTINORM:
+            signame = "NDimNormalParameters";
             break;
         case _SIGNAME_HASHLIST:
             signame = "ListOfHashes";
@@ -576,9 +586,13 @@ char* _genosig_astxt(genosig_t* sig, size_t* outsize, char* prefixstr, char sepa
     }
     if (issinglevec) {
         /* all single vector signatures follow roughly the same pattern */
-        resultparts = (char**)malloc(sizeof(char*)*(sig->siglen + 1));
-        partlens = (size_t*)malloc(sizeof(size_t)*(sig->siglen + 1));
-        nparts = sig->siglen + 1;
+        siglen = sig->siglen;
+        if (sig->signame == _SIGNAME_MULTINORM) {
+            siglen *= 2;
+        }
+        resultparts = (char**)malloc(sizeof(char*)*(siglen + 1));
+        partlens = (size_t*)malloc(sizeof(size_t)*(siglen + 1));
+        nparts = siglen + 1;
         /* signature name */
         namecomponents = calloc(3,sizeof(char*));
         i = 0;
@@ -604,35 +618,35 @@ char* _genosig_astxt(genosig_t* sig, size_t* outsize, char* prefixstr, char sepa
         /* actual signature */
         switch (sig->sigtype) {
             case _SIGTYPE_BYTE:
-                for (i = 0;i < sig->siglen;i++) {
+                for (i = 0;i < siglen;i++) {
                     valuei = (int64_t)(((char*)(sig->sigdata))[i]);
                     resultparts[i + 1] = text_fromint(valuei);
                     partlens[i + 1] = strlen(resultparts[i + 1]);
                 }
                 break;
             case _SIGTYPE_I32:
-                for (i = 0;i < sig->siglen;i++) {
+                for (i = 0;i < siglen;i++) {
                     valuei = (int64_t)(((int32_t*)(sig->sigdata))[i]);
                     resultparts[i + 1] = text_fromint(valuei);
                     partlens[i + 1] = strlen(resultparts[i + 1]);
                 }
                 break;
             case _SIGTYPE_I64:
-                for (i = 0;i < sig->siglen;i++) {
+                for (i = 0;i < siglen;i++) {
                     valuei = ((int64_t*)(sig->sigdata))[i];
                     resultparts[i + 1] = text_fromint(valuei);
                     partlens[i + 1] = strlen(resultparts[i + 1]);
                 }
                 break;
             case _SIGTYPE_DBL:
-                for (i = 0;i < sig->siglen;i++) {
+                for (i = 0;i < siglen;i++) {
                     valued = ((double*)(sig->sigdata))[i];
-                    resultparts[i + 1] = text_fromdbl(valued,8);
+                    resultparts[i + 1] = text_fromdbl(valued, 8);
                     partlens[i + 1] = strlen(resultparts[i + 1]);
                 }
                 break;
             case _SIGTYPE_SZT:
-                for (i = 0;i < sig->siglen;i++) {
+                for (i = 0;i < siglen;i++) {
                     valuei = (int64_t)(((size_t*)(sig->sigdata))[i]);
                     resultparts[i + 1] = text_fromint(valuei);
                     partlens[i + 1] = strlen(resultparts[i + 1]);
@@ -641,6 +655,7 @@ char* _genosig_astxt(genosig_t* sig, size_t* outsize, char* prefixstr, char sepa
             default:
                 break;
         }
+        
         for (i = 0;i < nparts;i++) {
             resultlen += partlens[i];
         }
@@ -649,7 +664,7 @@ char* _genosig_astxt(genosig_t* sig, size_t* outsize, char* prefixstr, char sepa
         partlens[nparts-1]++;
         resultlen++;
         resultparts[nparts - 1][partlens[nparts - 1]] = 0;
-        resultlen += sizeof(char)*sig->siglen; /* separators */
+        resultlen += sizeof(char)*siglen; /* separators */
     }
     else if (sig->sigtype == _SIGTYPE_SUFTREEARRAY) {
         /* since suffix trees are somewhat difficult to visualise, output the sequences */
@@ -752,6 +767,7 @@ char* genosig_asbin(genosig_t* sig, size_t* outsize){
         case _SIGNAME_GC:
         case _SIGNAME_GENOMELEN:
         case _SIGNAME_KARLINL:
+        case _SIGNAME_MULTINORM:
             resultlen = sig->sigsize;
             resultparts = (char**) malloc(sizeof(char*));
             partlens = (size_t*)malloc(sizeof(size_t));
@@ -907,7 +923,7 @@ genosig_t* genosig_import_v1muxed(PF_t* file) {
     return output;
 }
 
-genosig_t* genosig_import(char* filename) {
+genosig_t* genosig_importextra(char* filename, uint32_t flags) {
     /*
     genosig_import will always consider fasta-formatted data as double-stranded.
     Use genosig_fullgenome(..., ..., 1, ...) when dealing with single-stranded
@@ -921,14 +937,14 @@ genosig_t* genosig_import(char* filename) {
     PF_t* f;
     int32_t prefix1;
     int32_t prefix2;
-    prefix1 = (((uint32_t)'G')<<24) + (((uint32_t)'S') << 16);
-    prefix2 = (((uint32_t)'S')<<8) + ((uint32_t)'G');
+    prefix1 = (((uint32_t)'G') << 24) + (((uint32_t)'S') << 16);
+    prefix2 = (((uint32_t)'S') << 8) + ((uint32_t)'G');
     result = NULL;
     PFopen(&f, filename, "rb");
     if (f) {
-        if (!endswith(".sig",filename) && !endswith(".sdb",filename)) {
+        if (!endswith(".sig", filename) && !endswith(".sdb", filename)) {
             nsarr = nucseq_array_from_fasta(f, &count, 1, 2);
-            result = genosig_fullgenome(nsarr, count, 0, COPYLVL_INTEGRATE );
+            result = genosig_fullgenome(nsarr, count, 0, COPYLVL_INTEGRATE);
         }
         else {
             formattype = PFgetint32(f);
@@ -936,15 +952,20 @@ genosig_t* genosig_import(char* filename) {
                 result = genosig_import_v1(f);
             }
             else if (PFseemslikeASCIItext(f, 200)) {
-                PFrewind(f);
-                nsarr = nucseq_array_from_fasta(f, &count, 1, 1);
-                result = genosig_fullgenome(nsarr, count, 0, COPYLVL_INTEGRATE);
-                tmp = genosig_demux(result, &count);
-                for (i = 0;i < count;i++) {
-                    tmp[i] = genosig_suffixtrees(tmp[i]);
-                    genosig_cleargenomedata(tmp[i]);
+                if (0) /* (flags&GENOSIG_IMPORT_NOFASTA) */ {
+                    result = NULL;
                 }
-                result = genosig_multiplex(tmp, count);
+                else {
+                    PFrewind(f);
+                    nsarr = nucseq_array_from_fasta(f, &count, 1, 1);
+                    result = genosig_fullgenome(nsarr, count, 0, COPYLVL_INTEGRATE);
+                    tmp = genosig_demux(result, &count);
+                    for (i = 0;i < count;i++) {
+                        tmp[i] = genosig_suffixtrees(tmp[i]);
+                        genosig_cleargenomedata(tmp[i]);
+                    }
+                    result = genosig_multiplex(tmp, count);
+                }
             }
             else if (formattype == prefix1 || formattype == prefix2) {
                 result = genosig_loadbin(f);
@@ -963,10 +984,13 @@ genosig_t* genosig_import(char* filename) {
     }
     return result;
 }
+genosig_t* genosig_import(char* filename) {
+    return genosig_importextra(filename, 0);
+}
 /*
 about multiplexed signatures
 any signature involved in a (de)multiplexing operation should only be free'd once.
-As such, signatures should not free'd after multiplexing should not be free'd individually.
+As such, signatures should not free'd after multiplexing (i.e. should not be free'd individually).
 On the other hand, demultiplexing a signature invalidates its pointer.
 */
 genosig_t* genosig_multiplex(genosig_t** sigs, size_t count){
@@ -1598,7 +1622,7 @@ genosig_t* genosig_avgsig(genosig_t* sig, size_t is_weighted) {
     return output;
 }
 genosig_t* genosig_varsig(genosig_t* sig, size_t is_weighted) {
-    /* average signature of a non-multiplexed signature is always itself */
+    /* variance signature of a non-multiplexed signature is always NULL */
     /* a new signature is generated otehrwise*/
     int16_t shared_sigtype;
     int16_t shared_signame;
@@ -1611,7 +1635,7 @@ genosig_t* genosig_varsig(genosig_t* sig, size_t is_weighted) {
     double* varvec;
     double totweight;
     char* newname[2];
-    if (sig->sigtype != _SIGTYPE_MUXED) return sig;
+    if (sig->sigtype != _SIGTYPE_MUXED) return NULL;
     sigarr = sig->sigdata;
     shared_sigtype = sigarr[0]->sigtype;
     shared_siglen = sigarr[0]->siglen;
@@ -1698,6 +1722,196 @@ genosig_t* genosig_varsig(genosig_t* sig, size_t is_weighted) {
         }
         free(tmpd);
         free(weightvec);
+    }
+    else
+        output = NULL;
+    return output;
+}
+genosig_t* genosig_normparamsig(genosig_t* sig, size_t is_weighted) {
+    /* calculates mu and sigma for each component of the signature */
+    /* since the variance of a non-multiplexed signature is NULL, so is the output of this function */
+    int16_t shared_sigtype;
+    int16_t shared_signame;
+    size_t shared_siglen;
+    size_t i, j;
+    genosig_t** sigarr;
+    genosig_t* output;
+    double* tmpd;
+    double* tmpd2;
+    double* varvec;
+    double* weightvec;
+    double totweight;
+    char* newname[2];
+    char* data_c;
+    void* avgvec_v;
+    void* varvec_v;
+    size_t avgvec_size;
+    size_t varvec_size;
+    if (sig->sigtype != _SIGTYPE_MUXED) return NULL;
+    sigarr = sig->sigdata;
+    shared_sigtype = sigarr[0]->sigtype;
+    shared_siglen = sigarr[0]->siglen;
+    shared_signame = sigarr[0]->signame;
+    for (i = 0;i < sig->siglen;i++) {
+        if (sigarr[i]->sigtype != shared_sigtype)break;
+        if (sigarr[i]->siglen != shared_siglen)break;
+        if (sigarr[i]->signame != shared_signame)break;
+    }
+    if (i == sig->siglen) {
+        output = (genosig_t*)malloc(sizeof(genosig_t));
+        memcpy(output, sig, sizeof(genosig_t));
+        output->sigdata = NULL;
+        output->siglen = shared_siglen;
+        output->sigtype = shared_sigtype;
+        output->signame = _SIGNAME_MULTINORM;
+        newname[0] = "NormParams";
+        newname[1] = sig->name;
+        if (newname[1]) output->name = text_join(newname, ".", NULL, NULL, 2);
+        else if (sig->filepath) {
+            newname[1] = output->filepath;
+            output->name = text_join(newname, ".", NULL, NULL, 2);
+        }
+        else output->name = text_join(newname, ".", NULL, NULL, 1);
+        output->allocatedname = 1;
+        tmpd = calloc(shared_siglen, sizeof(double));
+        weightvec = (double*)malloc(sig->siglen * sizeof(double));
+        varvec = (double*)malloc(shared_siglen * sizeof(double));
+        totweight = 0;
+        if (is_weighted) {
+            for (j = 0;j < sig->siglen;j++) {
+                weightvec[j] = sigarr[j]->weight;
+            }
+            totweight = vec_sum(weightvec, sig->siglen);
+        }
+        else {
+            for (j = 0;j < sig->siglen;j++) {
+                weightvec[j] = 1.0;
+            }
+            totweight = (double)(sig->siglen);
+        }
+        switch (shared_sigtype) {
+            case _SIGTYPE_DBL:
+                for (i = 0;i < sig->siglen;i++) {
+                    if (is_weighted) {
+                        tmpd2 = vec_cpy((double*)(sigarr[i]->sigdata), shared_siglen);
+                        vec_scale(tmpd2, sigarr[i]->weight, shared_siglen);
+                        vec_add(tmpd, tmpd2, shared_siglen);
+                        free(tmpd2);
+                        totweight += sigarr[i]->weight;
+                    }
+                    else {
+                        vec_add(tmpd, (double*)(sigarr[i]->sigdata), shared_siglen);
+                        totweight += 1.0;
+                    }
+                }
+                vec_scale(tmpd, 1 / totweight, shared_siglen);
+                avgvec_size = shared_siglen * sizeof(double);
+                avgvec_v = (void*)tmpd;
+                break;
+            case _SIGTYPE_I32:
+                for (i = 0;i < sig->siglen;i++) {
+                    tmpd2 = veci32_to_vec((int32_t*)(sigarr[i]->sigdata), shared_siglen);
+                    if (is_weighted) {
+                        vec_scale(tmpd2, sigarr[i]->weight, shared_siglen);
+                        totweight += sigarr[i]->weight;
+                    }
+                    else {
+                        totweight += 1.0;
+                    }
+                    vec_add(tmpd, tmpd2, shared_siglen);
+                    free(tmpd2);
+                }
+                vec_scale(tmpd, 1 / totweight, shared_siglen);
+                avgvec_size = shared_siglen * sizeof(int32_t);
+                avgvec_v = (void*)vec_to_veci32(tmpd, shared_siglen);
+                free(tmpd);
+                break;
+            case _SIGTYPE_I64:
+                for (i = 0;i < sig->siglen;i++) {
+                    tmpd2 = veci64_to_vec((int64_t*)(sigarr[i]->sigdata), shared_siglen);
+                    if (is_weighted) {
+                        vec_scale(tmpd2, sigarr[i]->weight, shared_siglen);
+                        totweight += sigarr[i]->weight;
+                    }
+                    else {
+                        totweight += 1.0;
+                    }
+                    vec_add(tmpd, tmpd2, shared_siglen);
+                    free(tmpd2);
+                }
+                vec_scale(tmpd, 1 / totweight, shared_siglen);
+                avgvec_size = shared_siglen * sizeof(int64_t);
+                avgvec_v = (void*)vec_to_veci32(tmpd, shared_siglen);
+                free(tmpd);
+                break;
+            default:
+                avgvec_size = 0;
+                avgvec_v = NULL;
+                break;
+        }
+        tmpd = (double*)malloc(shared_siglen*sig->siglen * sizeof(double));
+        switch (shared_sigtype) {
+            case _SIGTYPE_DBL:
+                for (j = 0;j < sig->siglen;j++) {
+                    for (i = 0;i < shared_siglen;i++) {
+                        tmpd[i*sig->siglen + j] = ((double*)(sigarr[j]->sigdata))[i];
+                    }
+                }
+                for (i = 0;i < shared_siglen;i++) {
+                    varvec[i] = sqrt(vec_variance_weighted(tmpd + i*sig->siglen, weightvec, sig->siglen));
+                }
+                free(tmpd);
+                varvec_size = shared_siglen * sizeof(double);
+                varvec_v = (void*)varvec;
+                break;
+            case _SIGTYPE_I32:
+                for (j = 0;j < sig->siglen;j++) {
+                    for (i = 0;i < shared_siglen;i++) {
+                        tmpd[i*sig->siglen + j] = (double)(((int32_t*)(sigarr[j]->sigdata))[i]);
+                    }
+                }
+                for (i = 0;i < shared_siglen;i++) {
+                    varvec[i] = sqrt(vec_variance_weighted(tmpd + i*sig->siglen, weightvec, sig->siglen));
+                }
+                free(tmpd);
+                varvec_size = shared_siglen * sizeof(int32_t);
+                varvec_v = (void*)vec_to_veci32(varvec, shared_siglen);
+                free(varvec);
+                break;
+            case _SIGTYPE_I64:
+                for (j = 0;j < sig->siglen;j++) {
+                    for (i = 0;i < shared_siglen;i++) {
+                        tmpd[i*sig->siglen + j] = (double)(((int64_t*)(sigarr[j]->sigdata))[i]);
+                    }
+                }
+                for (i = 0;i < shared_siglen;i++) {
+                    varvec[i] = sqrt(vec_variance_weighted(tmpd + i*sig->siglen, weightvec, sig->siglen));
+                }
+                free(tmpd);
+                varvec_size = shared_siglen * sizeof(int64_t);
+                varvec_v = (void*)vec_to_veci64(varvec, shared_siglen);
+                free(varvec);
+                break;
+            default:
+                varvec_size = 0;
+                varvec_v = NULL;
+                break;
+        }
+        if (!avgvec_v || !varvec_v) {
+            output->sigdata = NULL;
+            output->sigsize = 0;
+            genosig_free(output);
+            output = NULL;
+        }
+        else {
+            data_c = (char*)malloc(avgvec_size + varvec_size);
+            memcpy(data_c, avgvec_v, avgvec_size);
+            memcpy(data_c+avgvec_size, varvec_v, varvec_size);
+            free(varvec_v);
+            free(avgvec_v);
+            output->sigsize = avgvec_size + varvec_size;
+            output->sigdata = (void*)data_c;
+        }
     }
     else
         output = NULL;
@@ -2304,9 +2518,64 @@ double genodist_samespecies(genosig_t* A, genosig_t* B, any_t flags){
 double genodist_sametype(genosig_t* A, genosig_t* B, any_t flags){
     return -1;
 }
+double genodist_avgzscore(genosig_t* sample, genosig_t* expected_distribution, any_t unused) {
+    double result;
+    void* diff;
+    double* diff_d;
+    double* scaling_factor;
+    genosig_t* tmpptr;
+    int sigtype;
+    size_t siglen;
 
-double genodist_externANIb(genosig_t* A, genosig_t* B, any_t blastpath){
-    char* args[13] = { NULL,"-query",NULL,"-subject",NULL,"-outfmt","6","-perc_identity","50.0","-max_target_seqs","1000","-num_threads","1" };
+    result = -1.0;
+    /* if different signature types are supplied, don't bother comparing them */
+    if (sample->sigtype != expected_distribution->sigtype) return result;
+    /* if "expected_distribution" does actually represent distribution parameters, also don't bother doing anything else */
+    if (sample->signame == _SIGNAME_MULTINORM && expected_distribution->signame != _SIGNAME_MULTINORM) {
+        tmpptr = sample;
+        sample = expected_distribution;
+        expected_distribution = tmpptr;
+    }
+    if (expected_distribution->signame != _SIGNAME_MULTINORM) return result;
+
+    sigtype = sample->sigtype;
+    siglen = sample->siglen;
+    if (sample->sigtype == _SIGTYPE_I32) {
+        /* only compare vectors with the same length */
+        if (siglen != expected_distribution->siglen) return result;
+        diff = malloc(sample->sigsize);
+        memcpy(diff, sample->sigdata, sample->sigsize);
+
+        veci32_subtract((int32_t*)diff, (int32_t*)(expected_distribution->sigdata),siglen);
+        diff_d = veci32_to_vec(diff, siglen);
+        free(diff);
+        vec_abs(diff_d, siglen);
+        scaling_factor = veci32_to_vec(((int32_t*)(expected_distribution->sigdata)) + siglen, siglen);
+        vec_inverse(scaling_factor, siglen);
+        vec_dot(diff_d, scaling_factor, siglen);
+        result = vec_avg(diff_d, siglen);
+        free(diff_d);
+        free(scaling_factor);
+    }
+    else if (sigtype == _SIGTYPE_DBL) {
+        /* only compare vectors with the same length */
+        if (siglen != expected_distribution->siglen) return result;
+
+        diff_d = vec_cpy(sample->sigdata, siglen);
+        vec_subtract(diff_d, (double*)(expected_distribution->sigdata), siglen);
+        vec_abs(diff_d, siglen);
+        scaling_factor = vec_cpy(((double*)(expected_distribution->sigdata)) + siglen, siglen);
+        vec_inverse(scaling_factor, siglen);
+        vec_dot(diff_d, scaling_factor, siglen);
+        result = vec_avg(diff_d, siglen);
+        free(diff_d);
+        free(scaling_factor);
+    }
+    return result;
+}
+
+double genodist_externANIb_oneway(genosig_t* A, genosig_t* B, any_t blastpath){
+    char* args[15] = { NULL,"-query",NULL,"-subject",NULL,"-outfmt","6 qaccver saccver pident length mismatch gapopen qstart qend sstart send evalue bitscore","-perc_identity","50.0","-max_target_seqs","1000","-num_threads","1","-culling_limit","1" };
     char* resultstr;
     double resultdist;
     double NI;
@@ -2321,7 +2590,7 @@ double genodist_externANIb(genosig_t* A, genosig_t* B, any_t blastpath){
     tries_remaining = 3;
     resultstr = NULL;
     while(tries_remaining > 0 && resultstr == NULL) {
-      resultstr = os_stdoutfromexec(blastpath.str, 13, args, &reslen, 0x10000);
+      resultstr = os_stdoutfromexec(blastpath.str, 15, args, &reslen, 0x10000);
       tries_remaining--;
     }
     if(!resultstr) return -1;
@@ -2349,13 +2618,18 @@ double genodist_externANIb(genosig_t* A, genosig_t* B, any_t blastpath){
         resultstr[j] = 0;
         alnlen = atoll(resultstr + i);
         while (i < reslen && resultstr[i] != '\n')i++;
-        resultdist += NI / 100.0*((double)alnlen);
+        resultdist += (NI / 100.0)*((double)alnlen);
         totlen += alnlen;
     }
     free(resultstr);
     if(totlen==0) return -1;
     return ((double)totlen - resultdist) / (double)totlen;
 }
+
+double genodist_externANIb(genosig_t* A, genosig_t* B, any_t blastpath){
+    return (genodist_externANIb_oneway(A,B,blastpath)+genodist_externANIb_oneway(B,A,blastpath))/2;
+}
+
 double genodist_externdist(genosig_t* A, genosig_t* B, any_t progstring){
     static int errordone = 0;
     if (!errordone) {

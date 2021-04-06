@@ -23,8 +23,13 @@ SOFTWARE.
 */
 
 /* GLOBAL DEFINES */
-#define VERSION_NAME    "GenDisCal v1.1.0"
+#define VERSION_NAME    "GenDisCal v1.2.1"
 #define CHANGES \
+"v1.2.1\n"\
+"Corrected analysis of blast output.\n"\
+"v1.2\n" \
+"-s / --search now works with .sdb files" \
+"v1.1\n" \
 "The program has been fully reworked internally, with hopefully not consequences on normal functionality.\n" \
 "In addition, the following options have been added:\n" \
 "--license         displays license\n" \
@@ -140,6 +145,7 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "   PaSiT/SVC <f>  -- use the PaSiT distance with a non-standard threshold\n"
         "   pearson/corr   -- use Pearson correlation as dissimilarity measure\n"
         "   reldist        -- use the mean of pairwise relative distances between signature values\n",
+        "   ANIb <path>    -- use nucleotide identity computed by <path> (full path to blastn)\n"
         "distance calculation method to be used");
     args_add_help(result, "preset", "OPTION PRESET",
         "For convenience some option presets are provided, which have shown good preformance during "
@@ -702,7 +708,7 @@ genosig_t* get_gene_signature(char* gene, genosig_bf basis, size_t nlen, int non
 }
 
 
-genosig_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t* numfiles, size_t* sig_len, int numthreads) {
+genosig_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t* numfiles, size_t* sig_len, int numthreads, size_t* p_nsearch) {
     /* This function is too massive and should probably be split into its consitituent parts */
     genosig_bf bf;
     size_t i, j, k, n;
@@ -963,9 +969,16 @@ genosig_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t* n
             if (result[i]) {
                 if (genosig_info_ismuxed(result[i])) {
                     nfiles += genosig_info_length(result[i]) - 1;
+                    *p_nsearch = genosig_info_length(result[i]);
                     j++;
                 }
+                else {
+                    *p_nsearch = 1;
+                }
             }
+        }
+        if (!args_ispresent(args, "search")) {
+            *p_nsearch = 0;
         }
         if (n != nfiles) {
             args_report_progress(NULL, "Additionally, " _LLD_ " signature(s) are contained inside of " _LLD_ " SDB file(s)\n", nfiles - n + j, j);
@@ -1389,7 +1402,7 @@ datatable_t* GenDisCal_perform_comparisons_hist_thread(
     return otable;
 }
 
-int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t nfiles, size_t sig_len, int numthreads) {
+int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n_search, size_t nfiles, size_t sig_len, int numthreads) {
     genosig_df mf;
     any_t metharg;
     int nocalc;
@@ -1461,9 +1474,9 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
         issearch = 1;
         if (outputmode == OUTPUTMODE_MATRIX)
             outputmode = OUTPUTMODE_NORMAL;
-        nfiles--;
-        args_report_info(NULL, "Search mode is enabled\n");
-        orderedamount = nfiles;
+        nfiles-= n_search;
+        args_report_info(NULL, "Search mode is enabled for %d signatures\n", (int)n_search);
+        orderedamount = nfiles * n_search;
     }
     else {
         issearch = 0;
@@ -1552,50 +1565,51 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
                     datatable_set(otable, ifl_added, ifl_added, 0.0);
                 }
                 if (issearch) {
-                    if (outputmode == OUTPUTMODE_ORDERED) {
-                        ocmp_types[ifl_added] = -3;
-                    }
-                    simlevel = (int)genodist_bytaxonomy(signatures[ifl_added], signatures[nfiles], metharg);
-                    if (onlylevel < -1 || simlevel == onlylevel) {
-                        if (signatures[ifl_added] && signatures[nfiles])
-                            dist = mf(signatures[ifl_added], signatures[nfiles], metharg);
-                        else
-                            dist = 1.0;
-                        if (dist >= minval && dist <= maxval) {
-                            if (outputmode == OUTPUTMODE_NORMAL) {
-                                if (signatures[ifl_added] && genosig_info_name(signatures[ifl_added])) fn1 = genosig_info_name(signatures[ifl_added]);
-                                else fn1 = "<File could not opened>";
-                                if (signatures[nfiles] && genosig_info_name(signatures[nfiles])) fn2 = genosig_info_name(signatures[nfiles]);
-                                else fn2 = "<File could not opened>";
+                    for (ifl_c = 0;ifl_c < n_search;ifl_c++) {
+                        if (outputmode == OUTPUTMODE_ORDERED) {
+                            ocmp_types[ifl_added + ifl_c*nfiles] = -3;
+                        }
+                        simlevel = (int)genodist_bytaxonomy(signatures[ifl_added], signatures[nfiles + ifl_c], metharg);
+                        if (onlylevel < -1 || simlevel == onlylevel) {
+                            if (signatures[ifl_added] && signatures[nfiles + ifl_c])
+                                dist = mf(signatures[ifl_added], signatures[nfiles+ifl_c], metharg);
+                            else
+                                dist = 1.0;
+                            if (dist >= minval && dist <= maxval) {
+                                if (outputmode == OUTPUTMODE_NORMAL) {
+                                    if (signatures[ifl_added] && genosig_info_name(signatures[ifl_added])) fn1 = genosig_info_name(signatures[ifl_added]);
+                                    else fn1 = "<File could not be opened>";
+                                    if (signatures[nfiles] && genosig_info_name(signatures[nfiles + ifl_c])) fn2 = genosig_info_name(signatures[nfiles + ifl_c]);
+                                    else fn2 = "<File could not be opened>";
 #pragma omp critical
-                                PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
-                            }
-                            if (outputmode == OUTPUTMODE_ORDERED) {
-                                ocmp_results[ifl_added] = dist;
-                                ocmp_types[ifl_added] = simlevel;
-                            }
-                            else if (outputmode == OUTPUTMODE_HIST) {
-                                if (dist >= 0.0) {
-                                    tmp1 = (size_t)round(dist / binwidth);
+                                    PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
+                                }
+                                if (outputmode == OUTPUTMODE_ORDERED) {
+                                    ocmp_results[ifl_added] = dist;
+                                    ocmp_types[ifl_added] = simlevel;
+                                }
+                                else if (outputmode == OUTPUTMODE_HIST) {
+                                    if (dist >= 0.0) {
+                                        tmp1 = (size_t)round(dist / binwidth);
 #pragma omp critical
-                                    {
-                                        nullflag = 0;
-                                        oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
-                                        if (nullflag)
-                                            oldval = 0.0;
-                                        datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                                        {
+                                            nullflag = 0;
+                                            oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
+                                            if (nullflag)
+                                                oldval = 0.0;
+                                            datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                                        }
                                     }
                                 }
-                            }
-                            else if (outputmode == OUTPUTMODE_MATRIX) {
-                                datatable_set(otable, ifl_added, nfiles, dist);
-                                datatable_set(otable, nfiles, ifl_added, dist);
-                            }
+                                else if (outputmode == OUTPUTMODE_MATRIX) {
+                                    datatable_set(otable, ifl_c, ifl_added, dist);
+                                }
 #pragma omp atomic
-                            (*p_n)++;
-                            if (nfiles < 100 || (*p_n) % (nfiles / 100) == 0) {
+                                (*p_n)++;
+                                if (nfiles*n_search < 100 || (*p_n) % (nfiles*n_search / 100) == 0) {
 #pragma omp critical
-                                args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) files compared\r", (*p_n), nfiles, (int)(((double)n * 100) / (double)nfiles));
+                                    args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) files compared\r", (*p_n), nfiles, (int)(((double)n * 100) / (double)(nfiles*n_search)));
+                                }
                             }
                         }
                     }
@@ -1763,6 +1777,7 @@ int GenDisCal(args_t* args) {
     size_t i;
     size_t numfiles, nfilesmod;
     size_t siglen;
+    size_t nsearch;
     int numthreads;
     filelist = GenDisCal_get_file_list(args, &numfiles);
     if (args_ispresent(args, "license")) {
@@ -1771,7 +1786,7 @@ int GenDisCal(args_t* args) {
                 "-------------------------------------------------------------------------------\n"
                 "MIT License\n"
                 "\n"
-                "Copyright (c) 2019 Gleb Goussarov\n"
+                "Copyright (c) 2020 Gleb Goussarov\n"
                 "\n"
                 "Permission is hereby granted, free of charge, to any person obtaining a copy\n"
                 "of this software and associated documentation files (the \"Software\"), to deal\n"
@@ -1805,13 +1820,13 @@ int GenDisCal(args_t* args) {
         numthreads = args_getint(args, "nprocs", 0, autothreads());
         args_report_info(NULL, "Using up to %d threads\n", numthreads);
         nfilesmod = numfiles;
-        siglist = GenDisCal_get_signatures(args, filelist, &nfilesmod, &siglen, numthreads);
+        siglist = GenDisCal_get_signatures(args, filelist, &nfilesmod, &siglen, numthreads, &nsearch);
         if (nfilesmod < 1) {
             args_report_error(NULL, "Number of files (" _LLD_ ") to be loaded is below 2! Aborting.\n", numfiles);
         }
         else {
             if (!args_ispresent(args, "keepsigs") || strcmp(args_getstr(args, "keepsigs", 0, "continue"), "continue") == 0) {
-                GenDisCal_perform_comparisons(args, siglist, nfilesmod, siglen, numthreads);
+                GenDisCal_perform_comparisons(args, siglist, nsearch, nfilesmod, siglen, numthreads);
             }
 
             for (i = 0;i < nfilesmod;i++) {

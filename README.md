@@ -9,7 +9,9 @@ using a distance method.
 To install GenDisCal on a GNU-Linux system, simply download the source code (with git clone
 or from here, as a compressed file) and run `make`. This should produce an obj directory and
 a bin directory. The runnable application will be located in the bin directory. GenDisCal
-can be compiled on windows, but no makefile is provided for this purpose at the moment.
+can also be compiled on windows by opening and building "GenDisCal.vcxproj" with Microsoft
+Visual Studio, though we recommend using the pre-built exectuable instead.
+
 
 Alternatively, you may use the "release" libraries, which also countains the graphical user
 interface (the ".jar" file). In order to use the GUI, please download the binary that is
