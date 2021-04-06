@@ -67,6 +67,17 @@ const int c2ntable[] = {
     /*7*/    -1,-1,-1,-1, nucT,nucT,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1 };
 const char n2ctable[] = { 'A', 'C', 'G', 'T' };
 
+const int invalidnuctable[] = {
+    //        0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
+    /*0*/    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    /*1*/    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    /*2*/    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    /*3*/    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    /*4*/    1, 0,1, 0,1,1,1, 0,1,1,1,1,1,1,0,1,
+    /*5*/    1,1,1,1, 0,0,1,1,1,1,1,1,1,1,1,1,
+    /*6*/    1, 0,1, 0,1,1,1, 0,1,1,1,1,1,1,0,1,
+    /*7*/    1,1,1,1, 0,0,1,1,1,1,1,1,1,1,1,1 };
+
 nucleotide char2nuc(char c) {
     return c2ntable[c];
 }
@@ -110,11 +121,28 @@ void force_clear_nucseq(nucseq* target)
     target->name = NULL;
 }
 
+int is_valid_nucleotide_fasta(char* str) {
+    size_t i;
+    size_t badcount;
+    i = 0;
+    badcount = 0;
+    while (str[i]) {
+        if (i >= ' ' && i <= '~')
+            badcount += invalidnuctable[str[i]];
+        else
+            badcount++;
+        i++;
+    }
+    if (badcount > 0)return 0;
+    return 1;
+}
+
 size_t nucseq_from_string(nucseq* target, char* str)
 {
     size_t i_;
     size_t reslen = 0;
     if (!target)return 0;
+    if (!is_valid_nucleotide_fasta(str))return 0;
     if (!(target->flags&READONLY)) {
         clear_nucseq(target);
         // Read the string and allocate length
@@ -165,7 +193,7 @@ char* strreadline(const char* buffer, size_t* start, size_t* extension) {
     return result;
 }
 
-nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, size_t minlen) {
+nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, size_t minlen, size_t* p_badcount) {
     nucseq** output = NULL;
     size_t nseqs;
     size_t nalloc;
@@ -174,6 +202,8 @@ nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, s
     size_t strfill = 0;
     size_t strcur = 0;
     size_t bufpos;
+    size_t invalids;
+    int is_invalid;
     char* curseqname = NULL;
     char* curseq = NULL;
     char buffer[0x10000] = { 0 };
@@ -183,6 +213,7 @@ nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, s
     bufpos = 0x10000;
     line = PFreadline(f);
     nseqs = 0;
+    invalids = 0;
     while (line) {
         strcur = strlen(line);
         if (line[0] == '>') {
@@ -196,7 +227,8 @@ nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, s
                     output[nseqs] = NULL;
                     output[nseqs - 1] = (nucseq*)malloc(sizeof(nucseq));
                     force_clear_nucseq(output[nseqs - 1]);
-                    nucseq_from_string(output[nseqs - 1], curseq);
+                    is_invalid = (nucseq_from_string(output[nseqs - 1], curseq) == 0 ? 1 : 0);
+                    invalids += (size_t)is_invalid;
                     if (saveseqnames) {
                         output[nseqs - 1]->name = curseqname;
                     }
@@ -238,7 +270,8 @@ nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, s
             output[nseqs] = NULL;
             output[nseqs - 1] = (nucseq*)malloc(sizeof(nucseq));
             force_clear_nucseq(output[nseqs - 1]);
-            nucseq_from_string(output[nseqs - 1], curseq);
+            is_invalid = (nucseq_from_string(output[nseqs - 1], curseq) == 0 ? 1 : 0);
+            invalids += (size_t)is_invalid;
             if (saveseqnames) {
                 output[nseqs - 1]->name = curseqname;
             }
@@ -248,6 +281,7 @@ nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, s
         strfill = 0;
         stralloc = 0;
     }
+    if (*p_badcount)*p_badcount = invalids;
     output = (nucseq**)realloc(output, sizeof(nucseq*)*(nseqs + 1));
     *OUT_count = nseqs;
     return output;

@@ -23,8 +23,11 @@ SOFTWARE.
 */
 
 /* GLOBAL DEFINES */
-#define VERSION_NAME    "GenDisCal v1.2.1"
+#define VERSION_NAME    "GenDisCal v1.2.2"
 #define CHANGES \
+"v1.2.2\n"\
+"Should no longer crash in cases where signatures cannot be computed.\n"\
+"A warning will now be issued when supplying protein fasta instead instead of nucleotide fasta.\n"\
 "v1.2.1\n"\
 "Corrected analysis of blast output.\n"\
 "Lowercase nucleotide fasta should now be handled properly.\n"\
@@ -633,6 +636,7 @@ genosig_t* get_signatures(char* filename, genosig_bf basis, size_t nlen, size_t 
     genosig_t* result;
     nucseq** nsarr;
     size_t outcount;
+    size_t badcount;
     PF_t* f;
     if (endswith(".sig", filename) || endswith(".sdb", filename)) {
         result = genosig_import(filename);
@@ -642,7 +646,13 @@ genosig_t* get_signatures(char* filename, genosig_bf basis, size_t nlen, size_t 
         if (basis != genosig_keepfilenameonly) {
             PFopen(&f, filename, "rb");
             if (f) {
-                nsarr = nucseq_array_from_fasta(f, &outcount, 1, minseqlen);
+                nsarr = nucseq_array_from_fasta(f, &outcount, 1, minseqlen,&badcount);
+                if (badcount) {
+                    args_report_warning(NULL, "File %s contained sequences which may not be nucleotide fasta.\n", filename);
+                }
+                if (outcount == 0) {
+                    args_report_warning(NULL, "File %s did not contain any sequences longer than " _LLD_ " nucleotides.\n", filename, minseqlen);
+                }
                 result = genosig_fullgenome(nsarr, outcount, singlestrand, COPYLVL_INTEGRATE);
                 if (winsize > 0) result = genosig_makewindows(result, winsize, 1);
                 if (!genosig_info_name(result))

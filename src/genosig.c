@@ -937,13 +937,14 @@ genosig_t* genosig_importextra(char* filename, uint32_t flags) {
     PF_t* f;
     int32_t prefix1;
     int32_t prefix2;
+    size_t badcount;
     prefix1 = (((uint32_t)'G') << 24) + (((uint32_t)'S') << 16);
     prefix2 = (((uint32_t)'S') << 8) + ((uint32_t)'G');
     result = NULL;
     PFopen(&f, filename, "rb");
     if (f) {
         if (!endswith(".sig", filename) && !endswith(".sdb", filename)) {
-            nsarr = nucseq_array_from_fasta(f, &count, 1, 2);
+            nsarr = nucseq_array_from_fasta(f, &count, 1, 2, &badcount);
             result = genosig_fullgenome(nsarr, count, 0, COPYLVL_INTEGRATE);
         }
         else {
@@ -957,7 +958,7 @@ genosig_t* genosig_importextra(char* filename, uint32_t flags) {
                 }
                 else {
                     PFrewind(f);
-                    nsarr = nucseq_array_from_fasta(f, &count, 1, 1);
+                    nsarr = nucseq_array_from_fasta(f, &count, 1, 1, &badcount);
                     result = genosig_fullgenome(nsarr, count, 0, COPYLVL_INTEGRATE);
                     tmp = genosig_demux(result, &count);
                     for (i = 0;i < count;i++) {
@@ -1220,7 +1221,12 @@ genosig_t* genosig_kmerfreq(genosig_t* sig, size_t k){
     sig = genosig_kmercount(sig, k);
     totcount = veci32_sum64((int32_t*)(sig->sigdata), sig->siglen);
     freqs = veci32_to_vec((int32_t*)(sig->sigdata), sig->siglen);
-    vec_scale(freqs, 1.0 / ((double)totcount), sig->siglen);
+    if (totcount > 0) {
+        vec_scale(freqs, 1.0 / ((double)totcount), sig->siglen);
+    }
+    else {
+        vec_scale(freqs, 0.0, sig->siglen);
+    }
     free(sig->sigdata);
     sig->sigdata = freqs;
     sig->sigsize = sig->siglen * sizeof(double);
@@ -1400,6 +1406,7 @@ static double* _karlinsig(uint32_t* counts, int k) {
     int zero_level = 0;
     /* first calculate the number of elements in counts */
     /* number of S combinations: 4^k */
+    if (!counts)return NULL;
     if (k < 1)return NULL;
     s_max = (uint64_t)pow(4, k);
     /* number of B combinations: 2^k-2 ( [0 0 ... 0] is not valid and [1 1 ... 1] is already stored in counts) */
@@ -1462,10 +1469,18 @@ genosig_t* genosig_karlinsig(genosig_t* sig, size_t k){
     ksig = _karlinsig((uint32_t*)(sig->sigdata), (int)k);
     if (sig->sigdata)
         free(sig->sigdata);
-    sig->sigdata = ksig;
-    sig->sigsize = sig->siglen*(sizeof(double));
-    sig->sigtype = _SIGTYPE_DBL;
-    sig->signame = _SIGNAME_KARLIN;
+    if (ksig) {
+        sig->sigdata = ksig;
+        sig->sigsize = sig->siglen*(sizeof(double));
+        sig->sigtype = _SIGTYPE_DBL;
+        sig->signame = _SIGNAME_KARLIN;
+    }
+    else {
+        sig->sigdata = ksig;
+        sig->sigsize = 0;
+        sig->sigtype = _SIGTYPE_NOSIG;
+        sig->signame = _SIGNAME_NONE;
+    }
     return sig;
 }
 genosig_t* genosig_karlinsigL(genosig_t* sig, size_t k) {
@@ -1475,13 +1490,19 @@ genosig_t* genosig_karlinsigL(genosig_t* sig, size_t k) {
     genolen = (double)veci32_sum64((uint32_t*)(sig->sigdata), sig->siglen);
     ksig = _karlinsig((uint32_t*)(sig->sigdata), (int)k);
     free(sig->sigdata);
-    ksig = (double*)realloc(ksig, sizeof(double)*(sig->siglen+1));
-    ksig[sig->siglen] = genolen;
-    sig->siglen++;
-    sig->sigdata = ksig;
-    sig->sigsize = sig->siglen*(sizeof(double));
-    sig->sigtype = _SIGTYPE_DBL;
-    sig->signame = _SIGNAME_KARLINL;
+    if (ksig) {
+        ksig = (double*)realloc(ksig, sizeof(double)*(sig->siglen + 1));
+        ksig[sig->siglen] = genolen;
+        sig->siglen++;
+        sig->sigdata = ksig;
+        sig->sigsize = sig->siglen*(sizeof(double));
+        sig->sigtype = _SIGTYPE_DBL;
+        sig->signame = _SIGNAME_KARLINL;
+    }
+    else {
+        sig->sigtype = _SIGTYPE_NOSIG;
+        sig->signame = _SIGNAME_NONE;
+    }
     return sig;
 }
 genosig_t* genosig_presenceabsence(genosig_t* sig, size_t unused) {
@@ -2035,6 +2056,7 @@ double genodist_manhattan(genosig_t* A, genosig_t* B, any_t flags){
     result = -1.0;
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
+    if (A->siglen == 0 || B->siglen == 0) return result;
 
     if (A->sigtype == _SIGTYPE_I32) {
         /* only compare vectors with the same length */
@@ -2072,6 +2094,7 @@ double genodist_euclidian(genosig_t* A, genosig_t* B, any_t flags){
     result = -1.0;
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
+    if (A->siglen == 0 || B->siglen == 0) return result;
 
     if (A->sigtype == _SIGTYPE_I32) {
         /* only compare vectors with the same length */
@@ -2107,6 +2130,7 @@ double genodist_pearscorr(genosig_t* A, genosig_t* B, any_t flags){
     result = -1.0;
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
+    if (A->siglen == 0 || B->siglen == 0) return result;
 
     if (A->sigtype == _SIGTYPE_DBL) {
         /* only compare vectors with the same length */
@@ -2121,6 +2145,7 @@ double genodist_rankcorr(genosig_t* A, genosig_t* B, any_t flags){
     result = -1.0;
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
+    if (A->siglen == 0 || B->siglen == 0) return result;
 
     if (A->sigtype == _SIGTYPE_DBL) {
         /* only compare vectors with the same length */
@@ -2147,6 +2172,7 @@ double genodist_hamming(genosig_t* A, genosig_t* B, any_t flags) {
     result = -1.0;
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
+    if (A->siglen == 0 || B->siglen == 0) return -1;
 
     eltsize = A->sigsize / A->siglen;
 
@@ -2198,6 +2224,8 @@ double genodist_approxANI(genosig_t* A, genosig_t* B, any_t flags){
     size_t AunionB;
     double k;
     double resemblance;
+    /* if different signature types are supplied, don't bother comparing them */
+    if (A->sigtype != B->sigtype) return -1;
 
     k = flags.d;
     if (k == 0) {
@@ -2237,6 +2265,7 @@ double genodist_SVC(genosig_t* A, genosig_t* B, any_t maxdelta) {
     result = -1.0;
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
+    if (A->siglen == 0 || B->siglen == 0) return result;
     siglen_to_consider = A->siglen;
     if (A->signame == _SIGNAME_KARLINL) siglen_to_consider--;
 
@@ -2289,6 +2318,7 @@ double genodist_satman(genosig_t* A, genosig_t* B, any_t maxdelta){
     result = -1.0;
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
+    if (A->siglen == 0 || B->siglen == 0) return result;
     siglen_to_consider = A->siglen;
     if (A->signame == _SIGNAME_KARLINL) siglen_to_consider--;
 
@@ -2359,6 +2389,7 @@ double genodist_PaSiTL(genosig_t* A, genosig_t* B, any_t maxdelta) {
     result = -1.0;
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype || A->sigtype != _SIGTYPE_DBL || A->signame != _SIGNAME_KARLINL) return result;
+    if (A->siglen == 0 || B->siglen == 0) return result;
     siglen_to_consider = A->siglen-1;
     
     maxed = 0;
@@ -2419,6 +2450,8 @@ double genodist_sateucl(genosig_t* A, genosig_t* B, any_t maxdelta) {
     result = -1.0;
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
+    if (A->siglen == 0 || B->siglen == 0) return result;
+
     siglen_to_consider = A->siglen;
     if (A->signame == _SIGNAME_KARLINL) siglen_to_consider--;
 
@@ -2530,6 +2563,7 @@ double genodist_avgzscore(genosig_t* sample, genosig_t* expected_distribution, a
     result = -1.0;
     /* if different signature types are supplied, don't bother comparing them */
     if (sample->sigtype != expected_distribution->sigtype) return result;
+
     /* if "expected_distribution" does actually represent distribution parameters, also don't bother doing anything else */
     if (sample->signame == _SIGNAME_MULTINORM && expected_distribution->signame != _SIGNAME_MULTINORM) {
         tmpptr = sample;

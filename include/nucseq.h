@@ -40,7 +40,7 @@ typedef struct nucseq {
 void clear_nucseq(nucseq* target);
 size_t nucseq_from_string(nucseq* target, char* str);
 char* nucseq_tritext(nucseq* target);
-nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, size_t minlen);
+nucseq** nucseq_array_from_fasta(PF_t* f, size_t* OUT_count, int saveseqnames, size_t minlen, size_t* p_badcount);
 char* nucseq_unimem(nucseq* target,size_t* outlen);
 void nucseq_fromunimem(nucseq* target, char* unimem);
 char* nucseq2fasta(nucseq* target, const char* name);
