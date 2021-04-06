@@ -148,8 +148,8 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "   hamming        -- use the hamming distance\n"
         "   PaSiT/SVC <f>  -- use the PaSiT distance with a non-standard threshold\n"
         "   pearson/corr   -- use Pearson correlation as dissimilarity measure\n"
-        "   reldist        -- use the mean of pairwise relative distances between signature values\n",
-        "   ANIb <path>    -- use nucleotide identity computed by <path> (full path to blastn)\n"
+        "   reldist        -- use the mean of pairwise relative distances between signature values\n"
+        "   ANIb <path>    -- use nucleotide identity computed by <path> (full path to blastn)\n",
         "distance calculation method to be used");
     args_add_help(result, "preset", "OPTION PRESET",
         "For convenience some option presets are provided, which have shown good preformance during "
