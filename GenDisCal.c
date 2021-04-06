@@ -27,6 +27,7 @@ SOFTWARE.
 #define CHANGES \
 "v1.2.1\n"\
 "Corrected analysis of blast output.\n"\
+"Lowercase nucleotide fasta should now be handled properly.\n"\
 "v1.2\n" \
 "-s / --search now works with .sdb files" \
 "v1.1\n" \
