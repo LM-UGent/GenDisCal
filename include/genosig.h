@@ -76,10 +76,13 @@ double genodist_bytaxonomy(genosig_t* A, genosig_t* B, any_t flags);
 double genodist_manhattan(genosig_t* A, genosig_t* B, any_t flags);
 double genodist_euclidian(genosig_t* A, genosig_t* B, any_t flags);
 double genodist_pearscorr(genosig_t* A, genosig_t* B, any_t flags);
+double genodist_pearscorr_unbound(genosig_t* A, genosig_t* B, any_t flags);
 double genodist_rankcorr(genosig_t* A, genosig_t* B, any_t flags);
+double genodist_rankcorr_unbound(genosig_t* A, genosig_t* B, any_t flags);
 double genodist_jaccard(genosig_t* A, genosig_t* B, any_t flags);
 double genodist_hamming(genosig_t* A, genosig_t* B, any_t flags);
 double genodist_approxANI(genosig_t* A, genosig_t* B, any_t flags);
+double genodist_approxANI_unbound(genosig_t* A, genosig_t* B, any_t flags);
 double genodist_SVC(genosig_t* A, genosig_t* B, any_t maxdelta);
 double genodist_satman(genosig_t* A, genosig_t* B, any_t maxdelta);
 double genodist_PaSiTL(genosig_t* A, genosig_t* B, any_t maxdelta);
@@ -89,6 +92,7 @@ double genodist_samespecies(genosig_t* A, genosig_t* B, any_t flags);
 double genodist_sametype(genosig_t* A, genosig_t* B, any_t flags);
 
 double genodist_externANIb(genosig_t* A, genosig_t* B, any_t blastpath);
+double genodist_externANIb_unbound(genosig_t* A, genosig_t* B, any_t blastpath);
 double genodist_externdist(genosig_t* A, genosig_t* B, any_t progstring);
 
 #endif

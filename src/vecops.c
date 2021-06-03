@@ -1285,7 +1285,39 @@ void vec_quicksort_byi64_parallel(void* target, size_t elt_size, int64_t* values
     
 }
 /**/
-
+void vec_reverse(double* target, size_t numel) {
+    double tmp;
+    size_t i,maxi,j;
+    maxi = numel / 2;
+    for (i = 0;i < maxi;i++) {
+        j = numel - 1 - i;
+        tmp = target[i];
+        target[i] = target[j];
+        target[j] = tmp;
+    }
+}
+void veci64_reverse(int64_t* target, size_t numel) {
+    int64_t tmp;
+    size_t i, maxi, j;
+    maxi = numel / 2;
+    for (i = 0;i < maxi;i++) {
+        j = numel - 1 - i;
+        tmp = target[i];
+        target[i] = target[j];
+        target[j] = tmp;
+    }
+}
+void vecptr_reverse(void** target, size_t numel) {
+    void* tmp;
+    size_t i, maxi, j;
+    maxi = numel / 2;
+    for (i = 0;i < maxi;i++) {
+        j = numel - 1 - i;
+        tmp = target[i];
+        target[i] = target[j];
+        target[j] = tmp;
+    }
+}
 
 uint64_t* vec_toranks(double* vec, size_t len) {
     /* this may not be the fastet way to get ranks - but it's easily implmented */

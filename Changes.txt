@@ -1,3 +1,25 @@
+v1.3.0
+*The following options are added:
+ --citation        displays citation.
+ --histogram_weights a file can now be specified which includes weights to assign to each signature when generating histograms.
+ --common_format     Changes the range of TETRA and ANI outputs to match the commonly used formats rather than the [0-1] range.
+*Some bugs from version 1.2 were fixed.
+
+v1.2.2
+CMD
+*Should no longer crash in cases where signatures cannot be computed.
+*A warning will now be issued when supplying protein fasta instead instead of nucleotide fasta.
+
+v1.2.1
+CMD:
+*Corrected analysis of blast output.
+*Lowercase nucleotide fasta should now be handled properly.
+
+v1.2.0
+CMD:
+*The following options were extended:
+ -s / --search now works with .sdb files
+
 v1.1.1
 GUI:
 *The "Import file list" button should now work as intended
@@ -6,3 +28,13 @@ GUI:
 
 v1.1.0
 Post-publication release
+CMD:
+*The following options are added:
+ --license         displays license
+ --version         displays current version
+ --changes         displays changes since the last minor update
+ -c / --canonical  shorten signatures to only include canonical k-mers
+ -a / --filealias  add aliasias to be displayed in place of filenames in the output
+ -e / --exclude    exclude samples based on taxonomy
+ -i / --include    include samples based on taxonomy
+ -u / --clustering perform clustering based on the distance matrix

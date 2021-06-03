@@ -23,8 +23,18 @@ SOFTWARE.
 */
 
 /* GLOBAL DEFINES */
-#define VERSION_NAME    "GenDisCal v1.2.2"
+#define VERSION_NAME    "GenDisCal v1.3.0"
+#define CITATION        "Goussarov G, Cleenwerck I, Mysara M, Leys N, Monsieurs P, Tahon G, Carlier A, Vandamme P, Van Houdt R. PaSiT: a novel approach based on short-oligonucleotide frequencies for efficient bacterial identification and typing. Bioinformatics. 2020 Apr 15;36(8):2337-2344. doi: 10.1093/bioinformatics/btz964. PMID: 31899493; PMCID: PMC7178395."
 #define CHANGES \
+"Planned for v1.3.0\n"\
+"The following options are added:\n"\
+"--citation          displays citation.\n"\
+"--histogram_weights a file can now be specified which includes weights to assign to each signature when generating histograms.\n"\
+"--common_format     Changes the range of TETRA and ANI outputs to match the commonly used formats rather than the [0-1] range.\n"\
+"Added a few extra error messages.\n"\
+"v1.2.3\n"\
+"Corrected a bug which caused GenDisCal to crash when NCBI taxonomy was used\n"\
+"Program will no longer crash when only one file is provide as a search target without reference"\
 "v1.2.2\n"\
 "Should no longer crash in cases where signatures cannot be computed.\n"\
 "A warning will now be issued when supplying protein fasta instead instead of nucleotide fasta.\n"\
@@ -97,6 +107,7 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
     args_add(result, "license", 0, "");
     args_add(result, "version", 0, "");
     args_add(result, "changes", 0, "");
+    args_add(result, "citation", 0, "");
     args_add(result, "basis", 'b', "str,var");
     args_add(result, "method", 'm', "str,var");
     args_add(result, "preset", 'p', "str");
@@ -118,13 +129,16 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
     args_add(result, "exclude", 'e', "...");
     args_add(result, "include", 'i', "...");
     args_add(result, "clustering", 'u', "str");
+    args_add(result, "genome_weights", 0, "str,str");
+    args_add(result, "common_format", 0, "");
     args_add(result, "z", 'z', "");
 #ifndef NOOPENMP
     args_add(result, "nprocs", 'n', "int");
 #endif
     args_add_help(result, "license", "LICENSE", "Prints the license(s) associated with GenDisCal.\n", "Print license(s)");
-    args_add_help(result, "version", "LICENSE", "Prints the license(s) associated with GenDisCal.\n", "Print license(s)");
-    args_add_help(result, "changes", "LICENSE", "Prints the license(s) associated with GenDisCal.\n", "Print license(s)");
+    args_add_help(result, "version", "LICENSE", "Prints the lversion number.\n", "Print version");
+    args_add_help(result, "changes", "LICENSE", "Prints the changes since last major version.\n", "Print changes");
+    args_add_help(result, "citation", "LICENSE", "Prints the license(s) associated with GenDisCal.\n", "Print citation(s)");
     args_add_help(result, "basis", "SIGNATURE BASIS",
         "Signature bases are used to transform a genome into a vector of numbers. "
         "Available signatures are as follows:\n"
@@ -294,10 +308,20 @@ args_t* GenDisCal_init_args(int argc, char** argv) {
         "specified after this option will be included. Sequences included this way may still "
         "be excluded using -e/--exclude.\n",
         "Include taxids");
+    args_add_help(result, "genome_weights", "GENOME WEIGHTS",
+        "This option is used to specify genome weights. It can be one of {subspecies, species (default),"
+        " genus, family, order, class, phylum} and requires that a taxonomy file be supplied. A second "
+        "optional which can be one of {identity (default), no_single, log, sqrt} can be added as well.\n",
+        "Genome weights to be used when creating histograms");
     args_add_help(result, "z", "END OF OPTION",
         "Use this flag to terminate arguments with unspecified counts. All names specified after "
         "this flag (but before the next flag/option) will be considered as query file names.\n",
-        "end of option");
+        "Use this flag to terminate argument input");
+    args_add_help(result, "common_format", "COMMON FORMAT",
+        "Use the common output ranges for some presets. For ANI (approxANI, ANIb), the values will be reported"
+        " between 100 (most similar) and 0 (least similar). For TETRA, or if '-m corr' or '-m rankcorr' is"
+        "specified, the output will be between 1 (most similar) and -1 (opposite)\n" ,
+        "Use standard ranges instead of the [0-1] range");
 #ifndef NOOPENMP
     args_add_help(result, "nprocs", "NUMBER OF PROCESSOR CORES TO USE",
         "This option defines the number of cores to use. By default, the number of cores "
@@ -408,26 +432,32 @@ int set_basis_function(args_t* args, genosig_bf* bf, size_t* sig_len, size_t* km
     presetstr = args_getstr(args, "preset", 0, NULL);
     if (presetstr) {
         if (strcmp(presetstr, "GC") == 0) {
+            args_report_info(NULL, "Basis is GC\n");
             *bf = genosig_GC;
             kmerlen = 1;
             *sig_len = 1;
         }
         if (strcmp(presetstr, "TETRA") == 0) {
+            args_report_warning(NULL, "the TETRA preset produces values in the [0:1] range whereas the original TETRA produces values in the [1:-1] range.");
+            args_report_info(NULL, "Basis is mmz 4\n");
             *bf = genosig_mmz;
             kmerlen = 4;
             *sig_len = (1LL << (4 * 2));
         }
         else if (strcmp(presetstr, "PaSiT4") == 0) {
+            args_report_info(NULL, "Basis is karl 4\n");
             *bf = genosig_karlinsig;
             kmerlen = 4;
             *sig_len = (1LL << (4 * 2));
         }
         else if (strcmp(presetstr, "PaSiT6") == 0) {
+            args_report_info(NULL, "Basis is karl 6\n");
             *bf = genosig_karlinsig;
             kmerlen = 6;
             *sig_len = (1LL << (6 * 2));
         }
         else if (strcmp(presetstr, "approxANI") == 0) {
+            args_report_info(NULL, "Basis is minhash\n");
             *bf = genosig_minhash;
             kmerlen = 21;
             *sig_len = 3000;
@@ -523,23 +553,35 @@ int set_method_function(args_t* args, genosig_df* mf, any_t* metharg) {
     char* methstr;
     char* presetstr;
     any_t resarg;
+    int commonform;
+    commonform = args_ispresent(args, "common_format");
     presetstr = args_getstr(args, "preset", 0, NULL);
     resarg.d = 0.02;
     if (presetstr) {
         if (strcmp(presetstr, "TETRA") == 0) {
-            *mf = genodist_pearscorr;
+            args_report_info(NULL, "Method is mpearson correlation (corr)\n");
+            if (commonform)
+                *mf = genodist_pearscorr_unbound;
+            else
+                *mf = genodist_pearscorr;
             resarg.d = 0.0;
         }
         else if (strcmp(presetstr, "PaSiT4") == 0) {
+            args_report_info(NULL, "Method is PaSiT 0.02\n");
             *mf = genodist_satman;
             resarg.d = 0.02;
         }
         else if (strcmp(presetstr, "PaSiT6") == 0) {
+            args_report_info(NULL, "Method is PaSiT 0.02\n");
             *mf = genodist_satman;
             resarg.d = 0.02;
         }
         else if (strcmp(presetstr, "approxANI") == 0) {
-            *mf = genodist_approxANI;
+            args_report_info(NULL, "Method is approxANI\n");
+            if (commonform)
+                *mf = genodist_approxANI_unbound;
+            else
+                *mf = genodist_approxANI;
             resarg.d = 21.0;
         }
         else {
@@ -575,11 +617,17 @@ int set_method_function(args_t* args, genosig_df* mf, any_t* metharg) {
             resarg.d = 0.0;
         }
         else if (strcmp(methstr, "corr") == 0 || strcmp(methstr, "pearson") == 0) {
-            *mf = genodist_pearscorr;
+            if (commonform)
+                *mf = genodist_pearscorr_unbound;
+            else
+                *mf = genodist_pearscorr;
             resarg.d = 0.0;
         }
         else if (strcmp(methstr, "rankcorr") == 0 || strcmp(methstr, "spearman") == 0) {
-            *mf = genodist_rankcorr;
+            if (commonform)
+                *mf = genodist_rankcorr_unbound;
+            else
+                *mf = genodist_rankcorr;
             resarg.d = 0.0;
         }
         else if (strcmp(methstr, "reldist") == 0) {
@@ -598,7 +646,10 @@ int set_method_function(args_t* args, genosig_df* mf, any_t* metharg) {
         else if (beginswith("ANIb", methstr)) {
             resarg.str = args_getstr(args,"method",1,NULL);
             if (resarg.str == NULL) args_report_error(NULL, "Please specify the path to blast to use ANIb\n");
-            *mf = genodist_externANIb;
+            if (commonform)
+                *mf = genodist_externANIb_unbound;
+            else
+                *mf = genodist_externANIb;
         }
         else if (strcmp(methstr, "approxANI") == 0) {
             *mf = genodist_approxANI;
@@ -648,7 +699,7 @@ genosig_t* get_signatures(char* filename, genosig_bf basis, size_t nlen, size_t 
             if (f) {
                 nsarr = nucseq_array_from_fasta(f, &outcount, 1, minseqlen,&badcount);
                 if (badcount) {
-                    args_report_warning(NULL, "File %s contained sequences which may not be nucleotide fasta.\n", filename);
+                    args_report_warning(NULL, "File %s contained sequences which may not be nucleotide fasta (bad count: " _LLD_ ".\n", filename, (uint64_t) badcount);
                 }
                 if (outcount == 0) {
                     args_report_warning(NULL, "File %s did not contain any sequences longer than " _LLD_ " nucleotides.\n", filename, minseqlen);
@@ -718,8 +769,134 @@ genosig_t* get_gene_signature(char* gene, genosig_bf basis, size_t nlen, int non
     return result;
 }
 
+double* get_sigweights(genosig_t** sigs, size_t nsigs, char* specification, char* approach) {
+    double* result;
+    size_t minamount;
+    size_t* groupids;
+    size_t* remids;
+    size_t nremids;
+    size_t i, curid, curgroup, curgroupsize;
+    size_t nalloc_groups;
+    size_t* group_sizes;
+    int groupsplit;
+    any_t dummy;
+    groupsplit = 0;
+    
+    dummy.u64 = 0;
+    result = malloc(sizeof(double)*nsigs);
+    if (strcmp(specification, "subspecies") == 0 || strcmp(specification, "subgroup") == 0) {
+        groupsplit = 7;
+    }
+    else if (strcmp(specification, "species") == 0) {
+        groupsplit = 6;
+    }
+    else if (strcmp(specification, "genus") == 0) {
+        groupsplit = 5;
+    }
+    else if (strcmp(specification, "family") == 0) {
+        groupsplit = 4;
+    }
+    else if (strcmp(specification, "order") == 0) {
+        groupsplit = 3;
+    }
+    else if (strcmp(specification, "class") == 0) {
+        groupsplit = 2;
+    }
+    else if (strcmp(specification, "phylum") == 0) {
+        groupsplit = 1;
+    }
+    if(groupsplit) {
+        args_report_info(NULL, "Assigning genome weights according to %s , this is not yet optimized and take a while if there are many groups\n", specification);
+        /*not really the most effective way of doing things - could be optimized to use hashing/mapping to go from O(n^2) to O(n) but that's a bit more involved on a practical level */
+        groupids = malloc(sizeof(size_t)*nsigs);
+        remids = malloc(sizeof(size_t)*nsigs);
+        nremids = nsigs;
+        curgroup = 0;
+        nalloc_groups = 16;
+        group_sizes = malloc(sizeof(size_t)*nalloc_groups);
+        for (i = 0;i < nsigs;i++) {
+            remids[i] = i;
+        }
+        while (nremids > 0) {
+            if (curgroup == nalloc_groups) {
+                nalloc_groups *= 2;
+                group_sizes = realloc(group_sizes, sizeof(size_t)*nalloc_groups);
+            }
+            curgroupsize = 1;
+            curid = remids[0];
+            groupids[curid] = curgroup;
+            nremids--;
+            remids[0] = remids[nremids];
+            i = 0;
+            while (i < nremids) {
+                if (genodist_bytaxonomy(sigs[curid], sigs[remids[i]], dummy) == (double)groupsplit) {
+                    groupids[remids[i]] = curgroup;
+                    nremids--;
+                    remids[i] = remids[nremids];
+                    curgroupsize++;
+                }
+                else i++;
+            }
+            group_sizes[curgroup] = curgroupsize;
+            curgroup++;
+        }
+        if (strcmp(approach, "sqrt") == 0) {
+            for (i = 0;i < nsigs;i++) {
+                result[i] = 1. / sqrt((double)group_sizes[groupids[i]]);
+            }
+        }
+        else if (strcmp(approach, "log") == 0) {
+            for (i = 0;i < nsigs;i++) {
+                result[i] = 1. / log((double)group_sizes[groupids[i]]);
+            }
+        }
+        else if (strcmp(approach, "no_single") == 0) {
+            for (i = 0;i < nsigs;i++) {
+                if (group_sizes[groupids[i]] > 1) {
+                    result[i] = 1. / log((double)group_sizes[groupids[i]]);
+                }
+                else {
+                    result[i] = 0;
+                    curgroup--;
+                }
 
-genosig_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t* numfiles, size_t* sig_len, int numthreads, size_t* p_nsearch) {
+            }
+        }
+        else if(strcmp(approach, "identity")==0) {
+            for (i = 0;i < nsigs;i++) {
+                result[i] = 1. / (double)group_sizes[groupids[i]];
+            }
+        }
+        else {
+            minamount = atoi(approach);
+            if (minamount <= 0) {
+                minamount = 2;
+            }
+            for (i = 0;i < nsigs;i++) {
+                if (group_sizes[groupids[i]] >= minamount) {
+                    result[i] = 1. / log((double)group_sizes[groupids[i]]);
+                }
+                else {
+                    result[i] = 0;
+                    curgroup--;
+                }
+
+            }
+        }
+        free(group_sizes);
+        free(groupids);
+        args_report_info(NULL, "Genomes weights normalized across %s , resulting in " _LLD_ " groups\n", specification, curgroup);
+    }
+    else {
+        args_report_error(NULL,"Unknown specification - all weights set to 1\n");
+        for (i = 0;i < nsigs;i++) {
+            result[i] = 1.;
+        }
+    }
+    return result;
+}
+
+genosig_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t* numfiles, size_t* sig_len, int numthreads, size_t* p_nsearch, double** p_sigweights) {
     /* This function is too massive and should probably be split into its consitituent parts */
     genosig_bf bf;
     size_t i, j, k, n;
@@ -837,7 +1014,7 @@ genosig_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t* n
                             }
                             taxtree_addleaves(taxtree, f, TAXFMT_CSV);
                         }
-                        free(tmpstr);
+                        /*free(tmpstr);*/
                         free(tmpstr2);
                     }
                     if (taxtree) {
@@ -1126,6 +1303,13 @@ genosig_t** GenDisCal_get_signatures(args_t* args, char** sourcefiles, size_t* n
         if (i != j) {
             args_report_progress(NULL, _LLD_ " signatures were kept\n", nfiles);
         }
+        if (p_sigweights) {
+            *p_sigweights = NULL;
+            if (args_ispresent(args, "genome_weights") && taxtree != NULL) {
+                *p_sigweights = get_sigweights(result,nfiles,args_getstr(args,"genome_weights",0,"species"), args_getstr(args, "genome_weights", 1, "identity"));
+            }
+        }
+
         if (include_ids) free(include_ids);
         if (include_list) free(include_list);
         if (exclude_ids) free(exclude_ids);
@@ -1264,7 +1448,10 @@ void GenDisCal_print_ordered_output(
     size_t i, j, k, n;
     char** outputlines;
     size_t offset;
-    PFprintf(outputf, "File1,File2,Expected_Relation,Distance\n");
+    if(sort_by_distance<2)
+        PFprintf(outputf, "File1,File2,Expected_Relation,Distance\n");
+    else
+        PFprintf(outputf, "File1,File2,Expected_Relation,Similarity\n");
     n = 0;
     for (j = 0;j < orderedamount;j++) {
         if (ocmp_types[j] != -3)n++;
@@ -1294,8 +1481,12 @@ void GenDisCal_print_ordered_output(
             }
         }
     }
-    if (sort_by_distance)
+    if (sort_by_distance%2!=0)
         vec_sort_by(outputlines, sizeof(char*), ocmp_results, n);
+    if (sort_by_distance>=2) {
+        vecptr_reverse((void**)outputlines, n);
+        vec_reverse(ocmp_results, n);
+    }
     for (j = 0;j < n;j++) {
         PFprintf(outputf, "%s,%f\n", outputlines[j], ocmp_results[j]);
         free(outputlines[j]);
@@ -1307,7 +1498,8 @@ void GenDisCal_print_ordered_output(
 
 datatable_t* GenDisCal_perform_comparisons_hist_thread(
         args_t* args, genosig_t** signatures, size_t nfiles, size_t sig_len,
-        int threadid, int numthreads, size_t* p_n, genosig_df mf, any_t metharg) {
+        int threadid, int numthreads, size_t* p_n, genosig_df mf, any_t metharg,
+        double* sigweights) {
     double dist = 0.0;
     double oldval;
     int simlevel;
@@ -1364,7 +1556,13 @@ datatable_t* GenDisCal_perform_comparisons_hist_thread(
                         oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
                         if (nullflag)
                             oldval = 0.0;
-                        datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                        if (sigweights) {
+                            datatable_set(otable, simlevel + 2, tmp1, oldval + sigweights[ifl_added]);
+                        }
+                        else {
+                            datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                        }
+                        
                     }
                     #pragma omp atomic
                     (*p_n)++;
@@ -1394,7 +1592,12 @@ datatable_t* GenDisCal_perform_comparisons_hist_thread(
                         oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
                         if (nullflag)
                             oldval = 0.0;
-                        datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                        if (sigweights) {
+                            datatable_set(otable, simlevel + 2, tmp1, oldval + sigweights[ifl_added] * sigweights[ifl_c]);
+                        }
+                        else {
+                            datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                        }
                     }
                     #pragma omp atomic
                     (*p_n)++;
@@ -1413,7 +1616,7 @@ datatable_t* GenDisCal_perform_comparisons_hist_thread(
     return otable;
 }
 
-int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n_search, size_t nfiles, size_t sig_len, int numthreads) {
+int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n_search, size_t nfiles, size_t sig_len, int numthreads, double* sigweights) {
     genosig_df mf;
     any_t metharg;
     int nocalc;
@@ -1442,6 +1645,7 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
     time_t step_start;
     time_t step_duration;
     int hours, minutes, seconds;
+    int commonform;
     /* parse relevant arguments */
     do_clustering = 0;
     nocalc = set_method_function(args, &mf, &metharg);
@@ -1461,7 +1665,7 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
         outputmode = OUTPUTMODE_HIST;
         binwidth = args_getdouble(args, "histogram", 0, 0.001);
     }
-
+    
     if (outputmode == OUTPUTMODE_ORDERED) {
         args_report_info(NULL, "Output mode: ORDERED\n");
     }
@@ -1497,12 +1701,17 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
         ocmp_results = (double*)malloc(sizeof(double)*orderedamount);
         ocmp_types = (int*)malloc(sizeof(int)*orderedamount);
     }
+    if (nfiles == 0) {
+        args_report_error(NULL, "Not enough files to reads\n");
+        return 1;
+    }
 
     PFopen(&outputf, args_getstr(args, "output", 0, "stdout"),"wb");
     if (!outputf) {
         args_report_error(NULL, "The output file <%s> could not be opened for writing! Aborting.\n", args_getstr(args, "output", 0, "stdout"));
         return 1;
     }
+    commonform = args_ispresent(args, "common_format");
 
     /* create the output table if needed */
 
@@ -1567,126 +1776,126 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
             size_t tmp1;
             size_t ordered_offset=0;
             if (outputmode == OUTPUTMODE_HIST) {
-                otable_sub[cthread] = GenDisCal_perform_comparisons_hist_thread(args, signatures, nfiles, sig_len, cthread, numthreads, p_n, mf, metharg);
+                otable_sub[cthread] = GenDisCal_perform_comparisons_hist_thread(args, signatures, nfiles, sig_len, cthread, numthreads, p_n, mf, metharg, sigweights);
             }
             else{
-            if (firstf > nfiles) firstf = nfiles;
-            for (ifl_added = firstf;ifl_added < lastf;ifl_added += numthreads) {
-               if (outputmode == OUTPUTMODE_MATRIX) {
-                    datatable_set(otable, ifl_added, ifl_added, 0.0);
-                }
-                if (issearch) {
-                    for (ifl_c = 0;ifl_c < n_search;ifl_c++) {
-                        if (outputmode == OUTPUTMODE_ORDERED) {
-                            ocmp_types[ifl_added + ifl_c*nfiles] = -3;
-                        }
-                        simlevel = (int)genodist_bytaxonomy(signatures[ifl_added], signatures[nfiles + ifl_c], metharg);
-                        if (onlylevel < -1 || simlevel == onlylevel) {
-                            if (signatures[ifl_added] && signatures[nfiles + ifl_c])
-                                dist = mf(signatures[ifl_added], signatures[nfiles+ifl_c], metharg);
-                            else
-                                dist = 1.0;
-                            if (dist >= minval && dist <= maxval) {
-                                if (outputmode == OUTPUTMODE_NORMAL) {
-                                    if (signatures[ifl_added] && genosig_info_name(signatures[ifl_added])) fn1 = genosig_info_name(signatures[ifl_added]);
-                                    else fn1 = "<File could not be opened>";
-                                    if (signatures[nfiles] && genosig_info_name(signatures[nfiles + ifl_c])) fn2 = genosig_info_name(signatures[nfiles + ifl_c]);
-                                    else fn2 = "<File could not be opened>";
-#pragma omp critical
-                                    PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
-                                }
-                                if (outputmode == OUTPUTMODE_ORDERED) {
-                                    ocmp_results[ifl_added] = dist;
-                                    ocmp_types[ifl_added] = simlevel;
-                                }
-                                else if (outputmode == OUTPUTMODE_HIST) {
-                                    if (dist >= 0.0) {
-                                        tmp1 = (size_t)round(dist / binwidth);
-#pragma omp critical
-                                        {
-                                            nullflag = 0;
-                                            oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
-                                            if (nullflag)
-                                                oldval = 0.0;
-                                            datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
-                                        }
-                                    }
-                                }
-                                else if (outputmode == OUTPUTMODE_MATRIX) {
-                                    datatable_set(otable, ifl_c, ifl_added, dist);
-                                }
-#pragma omp atomic
-                                (*p_n)++;
-                                if (nfiles*n_search < 100 || (*p_n) % (nfiles*n_search / 100) == 0) {
-#pragma omp critical
-                                    args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) files compared\r", (*p_n), nfiles, (int)(((double)n * 100) / (double)(nfiles*n_search)));
-                                }
-                            }
-                        }
+                if (firstf > nfiles) firstf = nfiles;
+                for (ifl_added = firstf;ifl_added < lastf;ifl_added += numthreads) {
+                   if (outputmode == OUTPUTMODE_MATRIX) {
+                        datatable_set(otable, ifl_added, ifl_added, 0.0);
                     }
-                }
-                else {
-                    ordered_offset = 1 + ifl_added*nfiles - (ifl_added + 1)*(ifl_added + 2) / 2;
-                    /* note: ordered_offset cannot be negative, but the above expression would return -1 for ifl_added == 0
-                     *       this is why "1+" is added at the beginning of the expression and subtracted later.
-                     *       While not doing either step should still work in theory as all the variables involved have
-                     *       the same size, this approach was preferred to avoid potential problems if this were to change,
-                     *       since (uint32_t)(-1) != (uint64_t)(-1), for example.
-                     */
-                    for (ifl_c = ifl_added + 1; ifl_c < nfiles;ifl_c++) {
-                        if (outputmode == OUTPUTMODE_ORDERED)
-                            ocmp_types[ifl_c + ordered_offset - 1] = -3;
-                        simlevel = (int)genodist_bytaxonomy(signatures[ifl_added], signatures[ifl_c], metharg);
-                        if (onlylevel < -1 || simlevel == onlylevel) {
-                            if (signatures[ifl_added] && signatures[ifl_c])
-                                dist = mf(signatures[ifl_added], signatures[ifl_c], metharg);
-                            else
-                                dist = 1.0;
-                            #pragma omp atomic
-                            (*p_n)++;
-                            if (nfsquare < 100 || (*p_n) % (nfsquare / 100) == 0) {
-                                #pragma omp critical
-                                args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) comparisons performed\r", (*p_n), nfsquare, (int)(((double)n * 100) / (double)nfsquare));
+                    if (issearch) {
+                        for (ifl_c = 0;ifl_c < n_search;ifl_c++) {
+                            if (outputmode == OUTPUTMODE_ORDERED) {
+                                ocmp_types[ifl_added + ifl_c*nfiles] = -3;
                             }
-                            if (dist >= minval && dist <= maxval) {
-                                if (outputmode == OUTPUTMODE_NORMAL) {
-                                    if (signatures[ifl_added] && genosig_info_name(signatures[ifl_added])) fn1 = genosig_info_name(signatures[ifl_added]);
-                                    else fn1 = "<File could not opened>";
-                                    if (signatures[ifl_c] && genosig_info_name(signatures[ifl_c])) fn2 = genosig_info_name(signatures[ifl_c]);
-                                    else fn2 = "<File could not opened>";
-#pragma omp critical
-                                    PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
-                                }
-                                if (outputmode == OUTPUTMODE_ORDERED) {
-                                    /* see above note for an explanation as to -1 is present here */
-                                    ocmp_results[ifl_c + ordered_offset - 1] = dist;
-                                    ocmp_types[ifl_c + ordered_offset - 1] = simlevel;
-                                }
-                                else if (outputmode == OUTPUTMODE_HIST) {
-                                    if (dist >= 0.0) {
-                                        tmp1 = (size_t)floor(dist / binwidth);
-#pragma omp critical
-                                        {
-                                            nullflag = 0;
-                                            oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
-                                            if (nullflag)
-                                                oldval = 0.0;
-                                            datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                            simlevel = (int)genodist_bytaxonomy(signatures[ifl_added], signatures[nfiles + ifl_c], metharg);
+                            if (onlylevel < -1 || simlevel == onlylevel) {
+                                if (signatures[ifl_added] && signatures[nfiles + ifl_c])
+                                    dist = mf(signatures[ifl_added], signatures[nfiles+ifl_c], metharg);
+                                else
+                                    dist = 1.0;
+                                if (dist >= minval && dist <= maxval) {
+                                    if (outputmode == OUTPUTMODE_NORMAL) {
+                                        if (signatures[ifl_added] && genosig_info_name(signatures[ifl_added])) fn1 = genosig_info_name(signatures[ifl_added]);
+                                        else fn1 = "<File could not be opened>";
+                                        if (signatures[nfiles] && genosig_info_name(signatures[nfiles + ifl_c])) fn2 = genosig_info_name(signatures[nfiles + ifl_c]);
+                                        else fn2 = "<File could not be opened>";
+                                        #pragma omp critical
+                                        PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
+                                    }
+                                    if (outputmode == OUTPUTMODE_ORDERED) {
+                                        ocmp_results[ifl_added] = dist;
+                                        ocmp_types[ifl_added] = simlevel;
+                                    }
+                                    else if (outputmode == OUTPUTMODE_HIST) {
+                                        if (dist >= 0.0) {
+                                            tmp1 = (size_t)round(dist / binwidth);
+                                            #pragma omp critical
+                                            {
+                                                nullflag = 0;
+                                                oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
+                                                if (nullflag)
+                                                    oldval = 0.0;
+                                                datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                                            }
                                         }
                                     }
-                                }
-                                else if (outputmode == OUTPUTMODE_MATRIX) {
-#pragma omp critical
-                                    {
-                                        datatable_set(otable, ifl_added, ifl_c, dist);
+                                    else if (outputmode == OUTPUTMODE_MATRIX) {
                                         datatable_set(otable, ifl_c, ifl_added, dist);
                                     }
+                                    #pragma omp atomic
+                                    (*p_n)++;
+                                    if (nfiles*n_search < 100 || (*p_n) % (nfiles*n_search / 100) == 0) {
+                                        #pragma omp critical
+                                        args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) files compared\r", (*p_n), nfiles, (int)(((double)n * 100) / (double)(nfiles*n_search)));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        ordered_offset = 1 + ifl_added*nfiles - (ifl_added + 1)*(ifl_added + 2) / 2;
+                        /* note: ordered_offset cannot be negative, but the above expression would return -1 for ifl_added == 0
+                         *       this is why "1+" is added at the beginning of the expression and subtracted later.
+                         *       While not doing either step should still work in theory as all the variables involved have
+                         *       the same size, this approach was preferred to avoid potential problems if this were to change,
+                         *       since (uint32_t)(-1) != (uint64_t)(-1), for example.
+                         */
+                        for (ifl_c = ifl_added + 1; ifl_c < nfiles;ifl_c++) {
+                            if (outputmode == OUTPUTMODE_ORDERED)
+                                ocmp_types[ifl_c + ordered_offset - 1] = -3;
+                            simlevel = (int)genodist_bytaxonomy(signatures[ifl_added], signatures[ifl_c], metharg);
+                            if (onlylevel < -1 || simlevel == onlylevel) {
+                                if (signatures[ifl_added] && signatures[ifl_c])
+                                    dist = mf(signatures[ifl_added], signatures[ifl_c], metharg);
+                                else
+                                    dist = 1.0;
+                                #pragma omp atomic
+                                (*p_n)++;
+                                if (nfsquare < 100 || (*p_n) % (nfsquare / 100) == 0) {
+                                    #pragma omp critical
+                                    args_report_progress(NULL, _LLD_ "/" _LLD_ " (%d%%) comparisons performed\r", (*p_n), nfsquare, (int)(((double)n * 100) / (double)nfsquare));
+                                }
+                                if (dist >= minval && dist <= maxval) {
+                                    if (outputmode == OUTPUTMODE_NORMAL) {
+                                        if (signatures[ifl_added] && genosig_info_name(signatures[ifl_added])) fn1 = genosig_info_name(signatures[ifl_added]);
+                                        else fn1 = "<File could not opened>";
+                                        if (signatures[ifl_c] && genosig_info_name(signatures[ifl_c])) fn2 = genosig_info_name(signatures[ifl_c]);
+                                        else fn2 = "<File could not opened>";
+    #pragma omp critical
+                                        PFprintf(outputf, "%s,%s,%s,%f\n", fn1, fn2, taxsimtostr(simlevel), dist);
+                                    }
+                                    if (outputmode == OUTPUTMODE_ORDERED) {
+                                        /* see above note for an explanation as to -1 is present here */
+                                        ocmp_results[ifl_c + ordered_offset - 1] = dist;
+                                        ocmp_types[ifl_c + ordered_offset - 1] = simlevel;
+                                    }
+                                    else if (outputmode == OUTPUTMODE_HIST) {
+                                        if (dist >= 0.0) {
+                                            tmp1 = (size_t)floor(dist / binwidth);
+    #pragma omp critical
+                                            {
+                                                nullflag = 0;
+                                                oldval = datatable_get(otable, simlevel + 2, tmp1, &nullflag);
+                                                if (nullflag)
+                                                    oldval = 0.0;
+                                                datatable_set(otable, simlevel + 2, tmp1, oldval + 1.0);
+                                            }
+                                        }
+                                    }
+                                    else if (outputmode == OUTPUTMODE_MATRIX) {
+    #pragma omp critical
+                                        {
+                                            datatable_set(otable, ifl_added, ifl_c, dist);
+                                            datatable_set(otable, ifl_c, ifl_added, dist);
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
             }
         }
         if (outputmode == OUTPUTMODE_HIST) {
@@ -1731,6 +1940,9 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
         }
         if (outputmode == OUTPUTMODE_MATRIX) {
             if (sort_by_distance) {
+                if (commonform) {
+                    args_report_warning(NULL, "Clustering will only produce correct results with distance matrices. If you are using a similarity metric (e.g. 100 = most similar, 0 = list similar), the clustering will be meaningless.\n");
+                }
                 step_start = time(NULL);
                 if (strcmp(args_getstr(args, "clustering", 0, "single"), "single") == 0) {
                     args_report_progress(NULL, "Sorting the output matrix using single linkage...\n");
@@ -1760,10 +1972,10 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
         }
     }
     if (!nocalc && outputmode == OUTPUTMODE_ORDERED) {
-        GenDisCal_print_ordered_output(orderedamount, ocmp_types, ocmp_results, nfiles, issearch, sort_by_distance, outputf, signatures);
+        args_report_progress(NULL, "Sorting output...\n");
+        GenDisCal_print_ordered_output(orderedamount, ocmp_types, ocmp_results, nfiles, issearch, sort_by_distance + commonform*2, outputf, signatures);
     }
     if (!nocalc && outputmode == OUTPUTMODE_MATRIX && do_clustering) {
-
         args_report_progress(NULL, "Printing dendrogram based on the output matrix...\n");
         step_start = time(NULL);
         if (strcmp(args_getstr(args, "clustering", 0, "ward"), "ward") == 0)
@@ -1785,12 +1997,14 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
 int GenDisCal(args_t* args) {
     char** filelist;
     genosig_t** siglist;
+    double* sigweights;
     size_t i;
     size_t numfiles, nfilesmod;
     size_t siglen;
     size_t nsearch;
     int numthreads;
     filelist = GenDisCal_get_file_list(args, &numfiles);
+    sigweights = NULL;
     if (args_ispresent(args, "license")) {
         fprintf(stdout, 
                 "GenDisCal\n"
@@ -1824,6 +2038,9 @@ int GenDisCal(args_t* args) {
     else if (args_ispresent(args, "changes")) {
         fprintf(stdout, "%s\n", CHANGES);
     }
+    else if (args_ispresent(args, "citation")) {
+        fprintf(stdout, "%s\n", CITATION);
+    }
     else if (numfiles < 1) {
         args_report_error(NULL, "Number of files (" _LLD_ ") to be loaded is below 2! Aborting.\n", numfiles);
     }
@@ -1831,13 +2048,13 @@ int GenDisCal(args_t* args) {
         numthreads = args_getint(args, "nprocs", 0, autothreads());
         args_report_info(NULL, "Using up to %d threads\n", numthreads);
         nfilesmod = numfiles;
-        siglist = GenDisCal_get_signatures(args, filelist, &nfilesmod, &siglen, numthreads, &nsearch);
-        if (nfilesmod < 1) {
-            args_report_error(NULL, "Number of files (" _LLD_ ") to be loaded is below 2! Aborting.\n", numfiles);
+        siglist = GenDisCal_get_signatures(args, filelist, &nfilesmod, &siglen, numthreads, &nsearch, &sigweights);
+        if (nfilesmod+nsearch < 2) {
+            args_report_error(NULL, "Number of files (" _LLD_ ") to be loaded is below 2! Aborting.\n", numfiles+nsearch);
         }
         else {
             if (!args_ispresent(args, "keepsigs") || strcmp(args_getstr(args, "keepsigs", 0, "continue"), "continue") == 0) {
-                GenDisCal_perform_comparisons(args, siglist, nsearch, nfilesmod, siglen, numthreads);
+                GenDisCal_perform_comparisons(args, siglist, nsearch, nfilesmod, siglen, numthreads, sigweights);
             }
 
             for (i = 0;i < nfilesmod;i++) {
@@ -1851,6 +2068,7 @@ int GenDisCal(args_t* args) {
     for (i = 0;i < numfiles;i++) {
         free(filelist[i]);
     }
+    if (sigweights)free(sigweights);
     free(filelist);
     return 0;
 }

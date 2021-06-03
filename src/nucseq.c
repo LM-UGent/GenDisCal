@@ -73,10 +73,10 @@ const int invalidnuctable[] = {
     /*1*/    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
     /*2*/    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
     /*3*/    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-    /*4*/    1, 0,1, 0,1,1,1, 0,1,1,1,1,1,1,0,1,
-    /*5*/    1,1,1,1, 0,0,1,1,1,1,1,1,1,1,1,1,
-    /*6*/    1, 0,1, 0,1,1,1, 0,1,1,1,1,1,1,0,1,
-    /*7*/    1,1,1,1, 0,0,1,1,1,1,1,1,1,1,1,1 };
+    /*4*/    1,0,1,0,1,1,1,0,1,1,1,1,1,1,0,1,
+    /*5*/    1,1,1,1,0,0,1,1,1,1,1,1,1,1,1,1,
+    /*6*/    1,0,1,0,1,1,1,0,1,1,1,1,1,1,0,1,
+    /*7*/    1,1,1,1,0,0,1,1,1,1,1,1,1,1,1,1 };
 
 nucleotide char2nuc(char c) {
     return c2ntable[c];
@@ -127,10 +127,12 @@ int is_valid_nucleotide_fasta(char* str) {
     i = 0;
     badcount = 0;
     while (str[i]) {
-        if (i >= ' ' && i <= '~')
+        if (str[i] >= ' ' && str[i] <= '~') {
             badcount += invalidnuctable[str[i]];
-        else
+        }
+        else {
             badcount++;
+        }
         i++;
     }
     if (badcount > 0)return 0;
@@ -1344,7 +1346,6 @@ size_t appendtoseq(nucseq* target, nucseq* right) {
 }
 
 /* MinHashing of sequences */
-
 void nucseq_oligocount_to_minhashLht(nucseq* sequence, ht64_t* target, int k, hashdesc_t* hash, size_t mod) {
     size_t i;
     size_t maxi;
@@ -1363,6 +1364,7 @@ void nucseq_oligocount_to_minhashLht(nucseq* sequence, ht64_t* target, int k, ha
     ignorecount = 0;
     numel = 0;
     keylen = 0;
+    if (stk > sequence->len)return;
     for (i = 0;i < stk;i++) {
         if (sequence->seq[i] == nucN)
             ignorecount = i + 1;
@@ -1388,8 +1390,8 @@ void nucseq_oligocount_to_minhashLht(nucseq* sequence, ht64_t* target, int k, ha
             }
         }
     }
-    free(tbs);
-    free(tbsrc);
+    if(tbs) free(tbs);
+    if(tbsrc) free(tbsrc);
 }
 ht64_t* kmerhash_minhashLtable(nucseq** allsequences, size_t nseqs, int k, hashdesc_t* hash, size_t mod) {
     uint64_t nbins;
@@ -1440,6 +1442,65 @@ int64_t* minhash_Msig(nucseq** allsequences, size_t nseqs, int k, size_t siglen,
     hashdesc_free(hash);
     return valuetable2;
 }
+
+/* Minimizer indices */
+size_t local__sequence_minimizer(void* sequence, size_t first, size_t window, int minimizer_size) {
+    size_t minpos;
+    size_t i;
+    size_t maxi;
+    maxi = first + window - (size_t)minimizer_size + 1;
+    minpos = first;
+    for (i = first;i < maxi;i++) {
+        if (memcmp(((char*)sequence) + i, ((char*)sequence) + minpos, minimizer_size) < 0) {
+            minpos = i;
+        }
+    }
+    return minpos;
+}
+size_t local__sequence_next_minimizer(void* sequence, size_t newstart, size_t window, int minimizer_size, size_t prev_minimizer) {
+    size_t minpos;
+    size_t maxi;
+    size_t first;
+    first = newstart;
+    maxi = first + window - (size_t)minimizer_size;
+    minpos = prev_minimizer;
+    if (prev_minimizer <= first) minpos = local__sequence_minimizer(sequence, first, window, minimizer_size);
+    else if (memcmp(((char*)sequence) + maxi, ((char*)sequence) + minpos, minimizer_size) < 0) minpos = maxi;
+    return minpos;
+}
+size_t* sequence_minimizers(void* sequence, size_t window, size_t length, int minimizer_size, size_t *p_count) {
+    size_t* result;
+    size_t nalloc, count;
+    size_t i, maxi;
+    size_t tmp;
+    nalloc = (length / window) + 1;
+    count = 0;
+    result = malloc(nalloc * sizeof(size_t));
+    maxi = length - window + 1;
+    result[0] = local__sequence_minimizer(sequence, 0, window, minimizer_size);
+    for (i = 1; i < maxi; i++) {
+        tmp = local__sequence_minimizer(sequence, i, window, minimizer_size);
+        if (tmp > result[count]) {
+            count++;
+            if (count == nalloc) {
+                nalloc *= 2;
+                result = realloc(result, nalloc * sizeof(size_t));
+            }
+            result[count] = tmp;
+        }
+    }
+    count++;
+    if (p_count)*p_count = count;
+    else {
+        if (count == nalloc) {
+            nalloc *= 2;
+            result = realloc(result, nalloc * sizeof(size_t));
+        }
+        result[count] = 0;
+    }
+    return result;
+}
+
 
 /* ******************
    Boyer-Moore Search

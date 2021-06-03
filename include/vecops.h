@@ -113,6 +113,9 @@ void vec_sort_by(void* target, size_t elt_size, double* values, size_t numel);
 void vec_sorti64(int64_t* target, size_t len);
 void vec_sort_byi64(void* target, size_t elt_size, int64_t* values, size_t numel);
 void vec_reorder_byi64(void* target, size_t elt_size, int64_t* new_order, size_t numel);
+void vec_reverse(double* target, size_t numel);
+void veci64_reverse(int64_t* target, size_t numel);
+void vecptr_reverse(void** target, size_t numel);
 
 uint64_t* vec_toranks(double* vec, size_t len);
 double vec_variance(double* X, size_t len);

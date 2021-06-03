@@ -28,6 +28,10 @@ SOFTWARE.
 #include "vecops.h"
 #include "suffixtree.h"
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 #define _SIGTYPE_NOSIG  0
 #define _SIGTYPE_BYTE   1
 #define _SIGTYPE_I32    2
@@ -1354,14 +1358,21 @@ genosig_t* genosig_mmz(genosig_t* sig, size_t k){
     return sig;
 }
 static inline int _count_set_bits(uint64_t value) {
+/*use builtins when available */
+#if GCC_VERSION > 30400
+    return (int)__builtin_popcountll(value);
+#elif (defined(_MSC_VER) && defined(_WIN64))
+    return (int)__popcnt64(value);
+#else
     /* For other ways to count bits, refer to:
     http://graphics.stanford.edu/~seander/bithacks.html#CountBitsSetTable  */
     uint64_t v = value;
-    unsigned int c;
+    int c;
     for (c = 0; v; c++) {
         v &= v - 1; /* clear the least significant bit set */
     }
     return c;
+#endif
 }
 static uint64_t _bindex(uint64_t S, uint64_t B, int setbits) {
     /* S represents [X_1 X_2 ... X_k] as SUM_n(X_n*4^n)
@@ -2140,6 +2151,20 @@ double genodist_pearscorr(genosig_t* A, genosig_t* B, any_t flags){
     /* this ensures that the output range is [0:1] with identical genomes having a "distance" of 0 */
     return 1.0 - (result + 1.0) / 2.0;
 }
+double genodist_pearscorr_unbound(genosig_t* A, genosig_t* B, any_t flags) {
+    double result;
+    result = -1.0;
+    /* if different signature types are supplied, don't bother comparing them */
+    if (A->sigtype != B->sigtype) return result;
+    if (A->siglen == 0 || B->siglen == 0) return result;
+
+    if (A->sigtype == _SIGTYPE_DBL) {
+        /* only compare vectors with the same length */
+        if (A->siglen != B->siglen) return result;
+        result = vec_pearsoncorr((double*)(A->sigdata), (double*)(B->sigdata), A->siglen);
+    }
+     return result;
+}
 double genodist_rankcorr(genosig_t* A, genosig_t* B, any_t flags){
     double result;
     result = -1.0;
@@ -2154,6 +2179,20 @@ double genodist_rankcorr(genosig_t* A, genosig_t* B, any_t flags){
     }
     /* this ensures that the output range is [0:1] with identical genomes having a "distance" of 0 */
     return 1.0 - (result + 1.0) / 2.0;
+}
+double genodist_rankcorr_unbound(genosig_t* A, genosig_t* B, any_t flags) {
+    double result;
+    result = -1.0;
+    /* if different signature types are supplied, don't bother comparing them */
+    if (A->sigtype != B->sigtype) return result;
+    if (A->siglen == 0 || B->siglen == 0) return result;
+
+    if (A->sigtype == _SIGTYPE_DBL) {
+        /* only compare vectors with the same length */
+        if (A->siglen != B->siglen) return result;
+        result = vec_spearmancorr((double*)(A->sigdata), (double*)(B->sigdata), A->siglen);
+    }
+    return result;
 }
 double genodist_jaccard(genosig_t* A, genosig_t* B, any_t flags){
     return -1;
@@ -2252,6 +2291,12 @@ double genodist_approxANI(genosig_t* A, genosig_t* B, any_t flags){
     }
     resemblance = ((double)AinterB) / ((double)AunionB);
     return 1 - resemblance2ANI(resemblance, k, (double)((s1[0] + s2[0]) / 2));
+}
+double genodist_approxANI_unbound(genosig_t* A, genosig_t* B, any_t flags) {
+    double tmp;
+    tmp = 100. - (genodist_approxANI(A, B, flags) * 100);
+    if (tmp > 100)tmp = 0;
+    return tmp;
 }
 double genodist_SVC(genosig_t* A, genosig_t* B, any_t maxdelta) {
     /* similar value count is a count of values where diff < maxdelta */
@@ -2663,6 +2708,13 @@ double genodist_externANIb_oneway(genosig_t* A, genosig_t* B, any_t blastpath){
 double genodist_externANIb(genosig_t* A, genosig_t* B, any_t blastpath){
     return (genodist_externANIb_oneway(A,B,blastpath)+genodist_externANIb_oneway(B,A,blastpath))/2;
 }
+double genodist_externANIb_unbound(genosig_t* A, genosig_t* B, any_t blastpath) {
+    double tmp;
+    tmp = 100.-genodist_externANIb(A, B, blastpath)*100;
+    if (tmp > 100)tmp = 0;
+    return tmp;
+}
+
 
 double genodist_externdist(genosig_t* A, genosig_t* B, any_t progstring){
     static int errordone = 0;
