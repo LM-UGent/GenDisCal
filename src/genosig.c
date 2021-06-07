@@ -2106,6 +2106,7 @@ double genodist_euclidian(genosig_t* A, genosig_t* B, any_t flags){
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
     if (A->siglen == 0 || B->siglen == 0) return result;
+    if (A == B) return 0;
 
     if (A->sigtype == _SIGTYPE_I32) {
         /* only compare vectors with the same length */
@@ -2142,6 +2143,7 @@ double genodist_pearscorr(genosig_t* A, genosig_t* B, any_t flags){
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
     if (A->siglen == 0 || B->siglen == 0) return result;
+    if (A == B) return 0;
 
     if (A->sigtype == _SIGTYPE_DBL) {
         /* only compare vectors with the same length */
@@ -2157,6 +2159,7 @@ double genodist_pearscorr_unbound(genosig_t* A, genosig_t* B, any_t flags) {
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
     if (A->siglen == 0 || B->siglen == 0) return result;
+    if (A == B) return 0;
 
     if (A->sigtype == _SIGTYPE_DBL) {
         /* only compare vectors with the same length */
@@ -2171,6 +2174,7 @@ double genodist_rankcorr(genosig_t* A, genosig_t* B, any_t flags){
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
     if (A->siglen == 0 || B->siglen == 0) return result;
+    if (A == B) return 0;
 
     if (A->sigtype == _SIGTYPE_DBL) {
         /* only compare vectors with the same length */
@@ -2186,6 +2190,7 @@ double genodist_rankcorr_unbound(genosig_t* A, genosig_t* B, any_t flags) {
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
     if (A->siglen == 0 || B->siglen == 0) return result;
+    if (A == B) return 0;
 
     if (A->sigtype == _SIGTYPE_DBL) {
         /* only compare vectors with the same length */
@@ -2212,6 +2217,7 @@ double genodist_hamming(genosig_t* A, genosig_t* B, any_t flags) {
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
     if (A->siglen == 0 || B->siglen == 0) return -1;
+    if (A == B) return 0;
 
     eltsize = A->sigsize / A->siglen;
 
@@ -2265,6 +2271,7 @@ double genodist_approxANI(genosig_t* A, genosig_t* B, any_t flags){
     double resemblance;
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return -1;
+    if (A == B) return 0;
 
     k = flags.d;
     if (k == 0) {
@@ -2311,6 +2318,7 @@ double genodist_SVC(genosig_t* A, genosig_t* B, any_t maxdelta) {
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
     if (A->siglen == 0 || B->siglen == 0) return result;
+    if (A == B) return 0;
     siglen_to_consider = A->siglen;
     if (A->signame == _SIGNAME_KARLINL) siglen_to_consider--;
 
@@ -2364,6 +2372,7 @@ double genodist_satman(genosig_t* A, genosig_t* B, any_t maxdelta){
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
     if (A->siglen == 0 || B->siglen == 0) return result;
+    if (A == B) return 0;
     siglen_to_consider = A->siglen;
     if (A->signame == _SIGNAME_KARLINL) siglen_to_consider--;
 
@@ -2435,6 +2444,7 @@ double genodist_PaSiTL(genosig_t* A, genosig_t* B, any_t maxdelta) {
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype || A->sigtype != _SIGTYPE_DBL || A->signame != _SIGNAME_KARLINL) return result;
     if (A->siglen == 0 || B->siglen == 0) return result;
+    if (A == B) return 0;
     siglen_to_consider = A->siglen-1;
     
     maxed = 0;
@@ -2496,6 +2506,7 @@ double genodist_sateucl(genosig_t* A, genosig_t* B, any_t maxdelta) {
     /* if different signature types are supplied, don't bother comparing them */
     if (A->sigtype != B->sigtype) return result;
     if (A->siglen == 0 || B->siglen == 0) return result;
+    if (A == B) return 0;
 
     siglen_to_consider = A->siglen;
     if (A->signame == _SIGNAME_KARLINL) siglen_to_consider--;
@@ -2572,6 +2583,7 @@ double genodist_ANI(genosig_t* A, genosig_t* B, any_t flags){
     size_t totlen;
     size_t alnlen;
     if (A->sigtype != B->sigtype || A->sigtype != _SIGTYPE_SUFTREEARRAY) return -1.0;
+    if (A == B) return 0;
     totlen = 0;
     ANI = 0;
     for (i = 0;i < A->siglen;i++) {
@@ -2663,6 +2675,7 @@ double genodist_externANIb_oneway(genosig_t* A, genosig_t* B, any_t blastpath){
     size_t i,j;
     size_t reslen;
     int tries_remaining;
+    if (A == B) return 0;
     args[0] = blastpath.str;
     args[2] = A->filepath;
     args[4] = B->filepath;

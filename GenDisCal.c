@@ -23,10 +23,14 @@ SOFTWARE.
 */
 
 /* GLOBAL DEFINES */
-#define VERSION_NAME    "GenDisCal v1.3.0"
+#define VERSION_NAME    "GenDisCal v1.3.1"
 #define CITATION        "Goussarov G, Cleenwerck I, Mysara M, Leys N, Monsieurs P, Tahon G, Carlier A, Vandamme P, Van Houdt R. PaSiT: a novel approach based on short-oligonucleotide frequencies for efficient bacterial identification and typing. Bioinformatics. 2020 Apr 15;36(8):2337-2344. doi: 10.1093/bioinformatics/btz964. PMID: 31899493; PMCID: PMC7178395."
 #define CHANGES \
-"Planned for v1.3.0\n"\
+"v1.3.1\n"\
+"More extensive help added to the GUI.\n"\
+"Added common_format support for some options where it was missing.\n"\
+"Diagonal values on similarity matrices should now be correct."\
+"v1.3.0\n"\
 "The following options are added:\n"\
 "--citation          displays citation.\n"\
 "--histogram_weights a file can now be specified which includes weights to assign to each signature when generating histograms.\n"\
@@ -560,28 +564,38 @@ int set_method_function(args_t* args, genosig_df* mf, any_t* metharg) {
     if (presetstr) {
         if (strcmp(presetstr, "TETRA") == 0) {
             args_report_info(NULL, "Method is mpearson correlation (corr)\n");
-            if (commonform)
+            if (commonform) {
                 *mf = genodist_pearscorr_unbound;
-            else
+                args_report_info(NULL, "Ouput should range from 1 (max similarity) to -1 (min similarity)\n");
+            }
+            else {
                 *mf = genodist_pearscorr;
+                args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
+            }
             resarg.d = 0.0;
         }
         else if (strcmp(presetstr, "PaSiT4") == 0) {
             args_report_info(NULL, "Method is PaSiT 0.02\n");
+            args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
             *mf = genodist_satman;
             resarg.d = 0.02;
         }
         else if (strcmp(presetstr, "PaSiT6") == 0) {
             args_report_info(NULL, "Method is PaSiT 0.02\n");
+            args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
             *mf = genodist_satman;
             resarg.d = 0.02;
         }
         else if (strcmp(presetstr, "approxANI") == 0) {
             args_report_info(NULL, "Method is approxANI\n");
-            if (commonform)
+            if (commonform) {
                 *mf = genodist_approxANI_unbound;
-            else
+                args_report_info(NULL, "Ouput should range from 100 (max similarity) to 0 (min similarity)\n");
+            }
+            else {
                 *mf = genodist_approxANI;
+                args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
+            }
             resarg.d = 21.0;
         }
         else {
@@ -594,49 +608,64 @@ int set_method_function(args_t* args, genosig_df* mf, any_t* metharg) {
         methstr = args_getstr(args, "method", 0, "SVC");
         if (strcmp(methstr, "AMD") == 0 || strcmp(methstr, "manhattan") == 0) {
             *mf = genodist_manhattan;
+            args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
             resarg.d = 0.0;
         }
         else if (strcmp(methstr, "ED") == 0 || strcmp(methstr, "euclid") == 0) {
             *mf = genodist_euclidian;
+            args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
             resarg.d = 0.0;
         }
         else if (strcmp(methstr, "SVC") == 0 || strcmp(methstr, "PaSiT") == 0 || strcmp(methstr, "satman") == 0) {
             *mf = genodist_satman;
             resarg.d = args_getdoublefromstr(args, "method", 1, 0.02);
+            args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
         }
         else if (strcmp(methstr, "PaSiTL") == 0) {
             *mf = genodist_PaSiTL;
             resarg.d = args_getdoublefromstr(args, "method", 1, 0.02);
+            args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
         }
         else if (strcmp(methstr, "sateucl") == 0 ) {
             *mf = genodist_sateucl;
             resarg.d = args_getdoublefromstr(args, "method", 1, 0.02);
+            args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
         }
         else if (strcmp(methstr, "hamming") == 0) {
             *mf = genodist_satman;
             resarg.d = 0.0;
         }
         else if (strcmp(methstr, "corr") == 0 || strcmp(methstr, "pearson") == 0) {
-            if (commonform)
+            if (commonform) {
                 *mf = genodist_pearscorr_unbound;
-            else
+                args_report_info(NULL, "Ouput should range from 1 (max similarity) to -1 (min similarity)\n");
+            }
+            else {
                 *mf = genodist_pearscorr;
+                args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
+            }
             resarg.d = 0.0;
         }
         else if (strcmp(methstr, "rankcorr") == 0 || strcmp(methstr, "spearman") == 0) {
-            if (commonform)
+            if (commonform) {
                 *mf = genodist_rankcorr_unbound;
-            else
+                args_report_info(NULL, "Ouput should range from 1 (max similarity) to -1 (min similarity)\n");
+            }
+            else {
                 *mf = genodist_rankcorr;
+                args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
+            }
             resarg.d = 0.0;
         }
         else if (strcmp(methstr, "reldist") == 0) {
             *mf = genodist_manhattan;
+            args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
             resarg.d = 0.0;
         }
         else if (beginswith("SVC", methstr)) {
             resarg.d = atof(methstr + 3);
             *mf = genodist_satman;
+            args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
             args_report_warning(NULL, "'-m SVC<f>' is deprecated, use '-m SVC <f>' instead\n");
         }
         else if (beginswith("alignseqs", methstr)) {
@@ -646,15 +675,26 @@ int set_method_function(args_t* args, genosig_df* mf, any_t* metharg) {
         else if (beginswith("ANIb", methstr)) {
             resarg.str = args_getstr(args,"method",1,NULL);
             if (resarg.str == NULL) args_report_error(NULL, "Please specify the path to blast to use ANIb\n");
-            if (commonform)
+            if (commonform) {
                 *mf = genodist_externANIb_unbound;
-            else
+                args_report_info(NULL, "Ouput should range from 100 (max similarity) to O (min similarity)\n");
+            }
+            else {
                 *mf = genodist_externANIb;
+                args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
+            }
         }
         else if (strcmp(methstr, "approxANI") == 0) {
             *mf = genodist_approxANI;
-            resarg.d = args_getdoublefromstr(args, "method", 1, 0.02);
-            resarg.d = 21.0;
+            if (commonform) {
+                *mf = genodist_approxANI_unbound;
+                args_report_info(NULL, "Ouput should range from 100 (max similarity) to 0 (min similarity)\n");
+            }
+            else {
+                *mf = genodist_approxANI;
+                args_report_info(NULL, "Ouput should range from 0 (max similarity) to 1 (min similarity)\n");
+            }
+            resarg.d = args_getdoublefromstr(args, "method", 1, 21.0);
         }
         else {
             resarg.str = args_getstr(args, "method", 1, NULL);
@@ -1646,6 +1686,7 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
     time_t step_duration;
     int hours, minutes, seconds;
     int commonform;
+    double maxsim;
     /* parse relevant arguments */
     do_clustering = 0;
     nocalc = set_method_function(args, &mf, &metharg);
@@ -1739,6 +1780,7 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
 
     /* do the actual calculations */
     if (!nocalc) {
+        maxsim = mf(signatures[0], signatures[0], metharg);
         if (nfiles < (size_t) numthreads) numthreads = (int) nfiles;
         omp_set_num_threads(numthreads);
         n = 0;
@@ -1781,8 +1823,8 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
             else{
                 if (firstf > nfiles) firstf = nfiles;
                 for (ifl_added = firstf;ifl_added < lastf;ifl_added += numthreads) {
-                   if (outputmode == OUTPUTMODE_MATRIX) {
-                        datatable_set(otable, ifl_added, ifl_added, 0.0);
+                    if (outputmode == OUTPUTMODE_MATRIX) {
+                        datatable_set(otable, ifl_added, ifl_added, maxsim);
                     }
                     if (issearch) {
                         for (ifl_c = 0;ifl_c < n_search;ifl_c++) {
@@ -1842,7 +1884,7 @@ int GenDisCal_perform_comparisons(args_t* args, genosig_t** signatures, size_t n
                          *       the same size, this approach was preferred to avoid potential problems if this were to change,
                          *       since (uint32_t)(-1) != (uint64_t)(-1), for example.
                          */
-                        for (ifl_c = ifl_added + 1; ifl_c < nfiles;ifl_c++) {
+                        for (ifl_c = ifl_added; ifl_c < nfiles;ifl_c++) {
                             if (outputmode == OUTPUTMODE_ORDERED)
                                 ocmp_types[ifl_c + ordered_offset - 1] = -3;
                             simlevel = (int)genodist_bytaxonomy(signatures[ifl_added], signatures[ifl_c], metharg);
